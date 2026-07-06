@@ -4,30 +4,30 @@ import asyncio
 import os
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Optional
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
+
 import httpx
 from rich.console import Console
 
+from .ai.analyzer import ContentAnalyzer
+from .ai.client import create_ai_client
+from .ai.enricher import ContentEnricher
+from .ai.summarizer import DailySummarizer
+from .ai.tokens import get_usage_snapshot
 from .models import Config, ContentItem
-from .storage.manager import StorageManager
-from .services.email import EmailManager
-from .services.webhook import WebhookNotifier
 from .scrapers.github import GitHubScraper
 from .scrapers.hackernews import HackerNewsScraper
-from .scrapers.rss import RSSScraper
+from .scrapers.openbb import OpenBBScraper
+from .scrapers.ossinsight import OSSInsightScraper
 from .scrapers.reddit import RedditScraper
+from .scrapers.rss import RSSScraper
 from .scrapers.telegram import TelegramScraper
 from .scrapers.twitter import TwitterScraper
 from .scrapers.twitter_playwright import TwitterPlaywrightScraper
-from .scrapers.openbb import OpenBBScraper
-from .scrapers.ossinsight import OSSInsightScraper
-from .ai.client import create_ai_client
-from .ai.analyzer import ContentAnalyzer
-from .ai.summarizer import DailySummarizer
-from .ai.enricher import ContentEnricher
-from .ai.tokens import get_usage_snapshot
+from .services.email import EmailManager
+from .services.webhook import WebhookNotifier
+from .storage.manager import StorageManager
 
 
 def _resolve_proxy() -> str:
@@ -43,11 +43,11 @@ def _resolve_proxy() -> str:
 class BalancedDigestResult:
     """Items and selection statistics from balanced digest filtering."""
 
-    items: List[ContentItem]
+    items: list[ContentItem]
     enabled: bool = False
-    group_counts: Dict[str, int] = field(default_factory=dict)
-    group_limits: Dict[str, Optional[int]] = field(default_factory=dict)
-    duplicate_categories: List[str] = field(default_factory=list)
+    group_counts: dict[str, int] = field(default_factory=dict)
+    group_limits: dict[str, int | None] = field(default_factory=dict)
+    duplicate_categories: list[str] = field(default_factory=list)
 
 
 class HorizonOrchestrator:
@@ -142,7 +142,7 @@ class HorizonOrchestrator:
             important_items = balanced_result.items
 
             # Show per-sub-source selection breakdown
-            selected_counts: Dict[str, int] = defaultdict(int)
+            selected_counts: dict[str, int] = defaultdict(int)
             for item in important_items:
                 key = f"{item.source_type.value}/{self._sub_source_label(item)}"
                 selected_counts[key] += 1
@@ -154,7 +154,7 @@ class HorizonOrchestrator:
             await self._enrich_important_items(important_items)
 
             # 7. Generate and save daily summaries for each configured language
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today = datetime.now(UTC).strftime("%Y-%m-%d")
             for lang in self.config.ai.languages:
                 summarizer = DailySummarizer()
                 summary = await summarizer.generate_summary(important_items, today, len(all_items), language=lang)
@@ -238,7 +238,7 @@ class HorizonOrchestrator:
             # Send webhook failure notification if configured
             if self.webhook_notifier:
                 await self.webhook_notifier.send_failure(
-                    date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    date=datetime.now(UTC).strftime("%Y-%m-%d"),
                     error_message=str(e),
                 )
 
@@ -246,13 +246,13 @@ class HorizonOrchestrator:
 
     def _determine_time_window(self, force_hours: int = None) -> datetime:
         if force_hours:
-            since = datetime.now(timezone.utc) - timedelta(hours=force_hours)
+            since = datetime.now(UTC) - timedelta(hours=force_hours)
         else:
             hours = self.config.filtering.time_window_hours
-            since = datetime.now(timezone.utc) - timedelta(hours=hours)
+            since = datetime.now(UTC) - timedelta(hours=hours)
         return since
 
-    async def fetch_all_sources(self, since: datetime) -> List[ContentItem]:
+    async def fetch_all_sources(self, since: datetime) -> list[ContentItem]:
         """Fetch content from all configured sources.
 
         This is a stable stage entry point for integrations such as MCP.
@@ -327,7 +327,7 @@ class HorizonOrchestrator:
 
             return all_items
 
-    async def _fetch_with_progress(self, name: str, scraper, since: datetime) -> List[ContentItem]:
+    async def _fetch_with_progress(self, name: str, scraper, since: datetime) -> list[ContentItem]:
         """Fetch from a scraper with progress indication.
 
         Args:
@@ -343,7 +343,7 @@ class HorizonOrchestrator:
         self.console.print(f"   Found {len(items)} items from {name}")
 
         # Show per-sub-source breakdown when there are multiple sub-sources
-        sub_counts: Dict[str, int] = defaultdict(int)
+        sub_counts: dict[str, int] = defaultdict(int)
         for item in items:
             sub_counts[self._sub_source_label(item)] += 1
         if len(sub_counts) > 1:
@@ -370,7 +370,7 @@ class HorizonOrchestrator:
             return meta["watchlist"]
         return item.author or "unknown"
 
-    def merge_cross_source_duplicates(self, items: List[ContentItem]) -> List[ContentItem]:
+    def merge_cross_source_duplicates(self, items: list[ContentItem]) -> list[ContentItem]:
         """Merge items that point to the same URL from different sources.
 
         This is a stable stage helper for integrations such as MCP.
@@ -393,13 +393,13 @@ class HorizonOrchestrator:
             return f"{host}{path}"
 
         # Group by normalized URL
-        url_groups: Dict[str, List[ContentItem]] = {}
+        url_groups: dict[str, list[ContentItem]] = {}
         for item in items:
             key = normalize_url(str(item.url))
             url_groups.setdefault(key, []).append(item)
 
         merged = []
-        for key, group in url_groups.items():
+        for _key, group in url_groups.items():
             if len(group) == 1:
                 merged.append(group[0])
                 continue
@@ -417,16 +417,15 @@ class HorizonOrchestrator:
                         primary.metadata[mk] = mv
 
                 # Append content (e.g., comments from another source)
-                if item is not primary and item.content:
-                    if primary.content and item.content not in primary.content:
-                        primary.content = (primary.content or "") + f"\n\n--- From {item.source_type.value} ---\n" + item.content
+                if item is not primary and item.content and primary.content and item.content not in primary.content:
+                    primary.content = (primary.content or "") + f"\n\n--- From {item.source_type.value} ---\n" + item.content
 
             primary.metadata["merged_sources"] = list(all_sources)
             merged.append(primary)
 
         return merged
 
-    async def merge_topic_duplicates(self, items: List[ContentItem]) -> List[ContentItem]:
+    async def merge_topic_duplicates(self, items: list[ContentItem]) -> list[ContentItem]:
         """Merge items covering the same topic using AI semantic deduplication.
 
         This is a stable stage helper for integrations such as MCP.
@@ -487,10 +486,9 @@ class HorizonOrchestrator:
                     continue
                 dup = items[dup_idx]
                 # Merge comments/content from the duplicate into the primary
-                if dup.content:
-                    if not primary.content or dup.content not in primary.content:
-                        label = dup.source_type.value
-                        primary.content = (primary.content or "") + f"\n\n--- From {label} ---\n{dup.content}"
+                if dup.content and (not primary.content or dup.content not in primary.content):
+                    label = dup.source_type.value
+                    primary.content = (primary.content or "") + f"\n\n--- From {label} ---\n{dup.content}"
                 self.console.print(
                     f"   [dim]dedup: keep [{primary_idx}] {primary.title}[/dim]\n"
                     f"   [dim]       drop [{dup_idx}] {dup.title}[/dim]"
@@ -501,7 +499,7 @@ class HorizonOrchestrator:
 
     def apply_balanced_digest(
         self,
-        items: List[ContentItem],
+        items: list[ContentItem],
         *,
         log: bool = True,
     ) -> BalancedDigestResult:
@@ -524,8 +522,8 @@ class HorizonOrchestrator:
             reverse=True,
         )
 
-        category_to_group: Dict[str, str] = {}
-        duplicate_categories: List[str] = []
+        category_to_group: dict[str, str] = {}
+        duplicate_categories: list[str] = []
         for group_key, group in groups.items():
             for category in group.categories:
                 if category in category_to_group:
@@ -542,8 +540,8 @@ class HorizonOrchestrator:
                     f"groups; using '{first_group}'.[/yellow]"
                 )
 
-        selected: List[tuple[ContentItem, str]] = []
-        group_counts: Dict[str, int] = defaultdict(int)
+        selected: list[tuple[ContentItem, str]] = []
+        group_counts: dict[str, int] = defaultdict(int)
         default_group = filtering.default_group
 
         for item in sorted_items:
@@ -554,10 +552,7 @@ class HorizonOrchestrator:
                 else default_group
             )
 
-            if group_key in groups:
-                limit = groups[group_key].limit
-            else:
-                limit = filtering.default_group_limit
+            limit = groups[group_key].limit if group_key in groups else filtering.default_group_limit
 
             if limit is not None and group_counts[group_key] >= limit:
                 continue
@@ -568,11 +563,11 @@ class HorizonOrchestrator:
         if max_items is not None:
             selected = selected[:max_items]
 
-        final_counts: Dict[str, int] = defaultdict(int)
+        final_counts: dict[str, int] = defaultdict(int)
         for _, group_key in selected:
             final_counts[group_key] += 1
 
-        group_limits: Dict[str, Optional[int]] = {
+        group_limits: dict[str, int | None] = {
             group_key: group.limit for group_key, group in groups.items()
         }
         group_limits.setdefault(default_group, filtering.default_group_limit)
@@ -609,7 +604,7 @@ class HorizonOrchestrator:
             duplicate_categories=sorted(set(duplicate_categories)),
         )
 
-    async def _expand_twitter_discussion(self, items: List[ContentItem]) -> None:
+    async def _expand_twitter_discussion(self, items: list[ContentItem]) -> None:
         """Second-stage: fetch reply text for important Twitter items and re-analyze.
 
         Only runs when sources.twitter.fetch_reply_text is True.
@@ -668,7 +663,7 @@ class HorizonOrchestrator:
         analyzer = ContentAnalyzer(ai_client)
         await analyzer.analyze_batch(expanded)
 
-    async def _enrich_important_items(self, items: List[ContentItem]) -> None:
+    async def _enrich_important_items(self, items: list[ContentItem]) -> None:
         """Enrich items with background knowledge (2nd AI pass).
 
         For each item that passed the score threshold, call AI to generate
@@ -686,7 +681,7 @@ class HorizonOrchestrator:
         await enricher.enrich_batch(items)
         self.console.print(f"   Enriched {len(items)} items\n")
 
-    async def _analyze_content(self, items: List[ContentItem]) -> List[ContentItem]:
+    async def _analyze_content(self, items: list[ContentItem]) -> list[ContentItem]:
         """Analyze content items with AI.
 
         Args:
@@ -704,7 +699,7 @@ class HorizonOrchestrator:
 
     async def _generate_summary(
         self,
-        items: List[ContentItem],
+        items: list[ContentItem],
         date: str,
         total_fetched: int,
         language: str = "en",

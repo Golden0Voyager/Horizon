@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -12,8 +12,8 @@ from src.models import (
     Config,
     ContentItem,
     FilteringConfig,
-    SourceType,
     SourcesConfig,
+    SourceType,
 )
 from src.orchestrator import HorizonOrchestrator
 
@@ -25,7 +25,7 @@ def make_item(item_id: str, score: float, category: str | None) -> ContentItem:
         source_type=SourceType.RSS,
         title=item_id,
         url=f"https://example.com/{item_id}",
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
         ai_score=score,
         metadata=metadata,
     )

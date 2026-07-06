@@ -160,11 +160,13 @@ def test_get_base_url_provider_named_env_var_used(monkeypatch):
 
 def test_get_base_url_returns_default_when_no_source_configured(monkeypatch):
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     cfg = _mk_config()
     assert get_base_url(cfg, default="https://onlydefault") == "https://onlydefault"
 
 
 def test_get_base_url_returns_none_when_no_default_supplied(monkeypatch):
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     cfg = _mk_config()
     assert get_base_url(cfg) is None

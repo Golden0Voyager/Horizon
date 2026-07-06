@@ -12,7 +12,7 @@ Coverage targets:
 """
 
 import asyncio
-from datetime import UTC, datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from src.models import OpenBBConfig, OpenBBWatchlist

@@ -66,6 +66,9 @@ todo.txt
 .codegraph/
 .ruff_cache
 .pytest_cache
+.mypy_cache/
+.coverage
+htmlcov/
 
 # Issue-tracker scratch (AGENTS.md §Agent skills: `Issues are tracked as local
 # markdown files under .scratch/<feature>/` — local-only, never committed).

@@ -109,7 +109,7 @@ class RedditScraper(BaseScraper):
         rss_url = f"{REDDIT_BASE}/r/{cfg.subreddit}/{cfg.sort}/.rss"
 
         try:
-            response = await self.client.get(
+            response = await self.http.get(
                 rss_url,
                 headers={
                     **self._headers,
@@ -328,7 +328,7 @@ class RedditScraper(BaseScraper):
 
     async def _reddit_get(self, url: str, params: dict) -> Any | None:
         try:
-            response = await self.client.get(
+            response = await self.http.get(
                 url,
                 params=params,
                 headers=self._headers,
@@ -338,7 +338,7 @@ class RedditScraper(BaseScraper):
                 retry_after = int(response.headers.get("Retry-After", 5))
                 logger.warning("Reddit rate limited, retrying after %ds", retry_after)
                 await asyncio.sleep(retry_after)
-                response = await self.client.get(
+                response = await self.http.get(
                     url,
                     params=params,
                     headers=self._headers,

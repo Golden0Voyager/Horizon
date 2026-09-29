@@ -14,7 +14,7 @@ _reddit_semaphore = asyncio.Semaphore(5)
 
 async def search_hn(query: str, client: httpx.AsyncClient) -> list[dict]:
     """Search HN Algolia. Returns list of {title, url, source, score, num_comments, date}."""
-    params = {"query": query, "tags": "story", "hitsPerPage": 3}
+    params: dict[str, str | int] = {"query": query, "tags": "story", "hitsPerPage": 3}
     try:
         resp = await client.get(HN_SEARCH_URL, params=params)
         resp.raise_for_status()
@@ -37,7 +37,7 @@ async def search_hn(query: str, client: httpx.AsyncClient) -> list[dict]:
 
 async def search_reddit(query: str, client: httpx.AsyncClient) -> list[dict]:
     """Search Reddit JSON API. Returns list of {title, url, source, score, num_comments, subreddit, date}."""
-    params = {"q": query, "sort": "relevance", "limit": 3, "t": "year"}
+    params: dict[str, str | int] = {"q": query, "sort": "relevance", "limit": 3, "t": "year"}
     headers = {"User-Agent": "Horizon/1.0 (tech news aggregator)"}
     try:
         async with _reddit_semaphore:
@@ -71,17 +71,19 @@ async def search_related(
     Deduplicates by URL against each item's own URL.
     """
 
-    async def _search_for_item(item: ContentItem) -> tuple:
+    async def _search_for_item(item: ContentItem) -> tuple[str, list[dict]]:
         query = item.title
+        hn_results: list[dict] | BaseException
+        reddit_results: list[dict] | BaseException
         hn_results, reddit_results = await asyncio.gather(
             search_hn(query, client),
             search_reddit(query, client),
             return_exceptions=True,
         )
         # Treat exceptions as empty results
-        if isinstance(hn_results, Exception):
+        if isinstance(hn_results, BaseException):
             hn_results = []
-        if isinstance(reddit_results, Exception):
+        if isinstance(reddit_results, BaseException):
             reddit_results = []
 
         # Dedup: remove results whose URL matches the item's own URL
@@ -98,7 +100,7 @@ async def search_related(
 
     mapping: dict[str, list[dict]] = {}
     for result in results:
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             continue
         item_id, related = result
         mapping[item_id] = related

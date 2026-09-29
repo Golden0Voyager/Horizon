@@ -9,6 +9,8 @@ import random
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydantic import HttpUrl
+
 from ..models import ContentItem, SourceType, TwitterConfig
 from .base import BaseScraper
 
@@ -379,7 +381,7 @@ class TwitterPlaywrightScraper(BaseScraper):
                 id=self._generate_id(SourceType.TWITTER.value, "tweet", tweet_id),
                 source_type=SourceType.TWITTER,
                 title=f"@{username}: {title_body}",
-                url=f"https://x.com/{username}/status/{tweet_id}",
+                url=HttpUrl(f"https://x.com/{username}/status/{tweet_id}"),
                 content=text,
                 author=username,
                 published_at=published_at,

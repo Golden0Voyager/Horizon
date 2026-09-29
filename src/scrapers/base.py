@@ -21,6 +21,17 @@ class BaseScraper(ABC):
         self.config = config
         self.client = http_client
 
+    @property
+    def http(self) -> httpx.AsyncClient:
+        """The shared async HTTP client, narrowed to the non-``None`` type.
+
+        Raises ``RuntimeError`` if no client was injected, rather than letting
+        an ``AttributeError`` surface later at a ``self.client.get`` call.
+        """
+        if self.client is None:
+            raise RuntimeError("HTTP client is required but was not provided")
+        return self.client
+
     @abstractmethod
     async def fetch(self, since: datetime) -> list[ContentItem]:
         """Fetch content items published since the given time.

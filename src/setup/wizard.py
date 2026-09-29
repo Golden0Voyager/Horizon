@@ -320,10 +320,10 @@ def merge_configs(new_config: Config, existing_config: Config) -> Config:
 
     # Merge RSS sources by URL
     existing_rss = {s.url: s for s in existing_config.sources.rss}
-    for src in merged.sources.rss:
-        if src.url in existing_rss:
-            src.enabled = existing_rss[src.url].enabled
-            del existing_rss[src.url]
+    for rss_src in merged.sources.rss:
+        if rss_src.url in existing_rss:
+            rss_src.enabled = existing_rss[rss_src.url].enabled
+            del existing_rss[rss_src.url]
     merged.sources.rss.extend(existing_rss.values())
 
     # Merge Reddit subreddits

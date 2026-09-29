@@ -70,7 +70,7 @@ class HorizonOrchestrator:
             else None
         )
 
-    async def run(self, force_hours: int = None) -> None:
+    async def run(self, force_hours: int | None = None) -> None:
         """Execute the complete workflow.
 
         Args:
@@ -244,7 +244,7 @@ class HorizonOrchestrator:
 
             raise
 
-    def _determine_time_window(self, force_hours: int = None) -> datetime:
+    def _determine_time_window(self, force_hours: int | None = None) -> datetime:
         if force_hours:
             since = datetime.now(UTC) - timedelta(hours=force_hours)
         else:
@@ -298,6 +298,7 @@ class HorizonOrchestrator:
             # Twitter (Apify or Playwright mode)
             if self.config.sources.twitter and self.config.sources.twitter.enabled:
                 tw_cfg = self.config.sources.twitter
+                twitter_scraper: TwitterScraper | TwitterPlaywrightScraper
                 if tw_cfg.mode == "playwright":
                     twitter_scraper = TwitterPlaywrightScraper(tw_cfg)
                 else:
@@ -545,12 +546,11 @@ class HorizonOrchestrator:
         default_group = filtering.default_group
 
         for item in sorted_items:
-            category = item.metadata.get("category")
-            group_key = (
-                category_to_group.get(category, default_group)
-                if isinstance(category, str)
-                else default_group
-            )
+            item_category = item.metadata.get("category")
+            if isinstance(item_category, str):
+                group_key = category_to_group.get(item_category, default_group)
+            else:
+                group_key = default_group
 
             limit = groups[group_key].limit if group_key in groups else filtering.default_group_limit
 

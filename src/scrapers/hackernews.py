@@ -28,7 +28,7 @@ class HackerNewsScraper(BaseScraper):
             return []
 
         try:
-            response = await self.client.get(f"{self.base_url}/topstories.json")
+            response = await self.http.get(f"{self.base_url}/topstories.json")
             response.raise_for_status()
             story_ids = response.json()
 
@@ -47,7 +47,7 @@ class HackerNewsScraper(BaseScraper):
             valid_stories = []
 
             for story in stories:
-                if isinstance(story, Exception) or story is None:
+                if isinstance(story, BaseException) or story is None:
                     continue
                 if story.get("score", 0) < min_score:
                     continue
@@ -63,7 +63,7 @@ class HackerNewsScraper(BaseScraper):
             all_comments = await asyncio.gather(*comment_tasks, return_exceptions=True)
 
             for story, comments in zip(valid_stories, all_comments, strict=False):
-                if isinstance(comments, Exception):
+                if isinstance(comments, BaseException):
                     comments = []
                 item = self._parse_story(story, comments)
                 if item:
@@ -77,7 +77,7 @@ class HackerNewsScraper(BaseScraper):
 
     async def _fetch_story(self, story_id: int) -> dict | None:
         try:
-            response = await self.client.get(f"{self.base_url}/item/{story_id}.json")
+            response = await self.http.get(f"{self.base_url}/item/{story_id}.json")
             response.raise_for_status()
             return response.json()
         except httpx.HTTPError:

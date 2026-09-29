@@ -676,5 +676,8 @@ class HorizonPipelineService:
 
         return {
             "sent": True,
-            "variables": {k: (v if k != "summary" else f"<{len(v)} chars>") for k, v in variables.items()},
+            "variables": {
+                k: (v if k != "summary" else f"<{len(str(v))} chars>")
+                for k, v in variables.items()
+            },
         }

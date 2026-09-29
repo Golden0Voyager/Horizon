@@ -10,6 +10,7 @@ configured languages flow through.
 from datetime import UTC, datetime
 
 import httpx
+from pydantic import HttpUrl
 
 from ..models import ContentItem, OSSInsightConfig, SourceType
 from .base import BaseScraper
@@ -27,7 +28,7 @@ class OSSInsightScraper(BaseScraper):
             config: OSS Insight source configuration
             http_client: Shared async HTTP client
         """
-        super().__init__(config, http_client)
+        super().__init__(config.model_dump(), http_client)
         self.cfg: OSSInsightConfig = config
         self._keywords_lower = [kw.lower() for kw in self.cfg.keywords if kw]
 
@@ -61,7 +62,7 @@ class OSSInsightScraper(BaseScraper):
         """Call OSS Insight API for one (period, language) combo."""
         params = {"period": period, "language": language}
         try:
-            response = await self.client.get(
+            response = await self.http.get(
                 self.BASE_URL,
                 params=params,
                 headers={"Accept": "application/json", "User-Agent": "Horizon/1.0"},
@@ -110,7 +111,7 @@ class OSSInsightScraper(BaseScraper):
             id=self._generate_id(SourceType.OSSINSIGHT.value, "trending", str(repo_id)),
             source_type=SourceType.OSSINSIGHT,
             title=title,
-            url=url,
+            url=HttpUrl(url),
             content="\n".join(content_lines),
             author=repo_name.split("/")[0] if "/" in repo_name else None,
             published_at=datetime.now(UTC),

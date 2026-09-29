@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 
 import httpx
+from pydantic import HttpUrl
 
 from ..models import ContentItem, GitHubSourceConfig, SourceType
 from .base import BaseScraper
@@ -85,7 +86,7 @@ class GitHubScraper(BaseScraper):
         items = []
 
         try:
-            response = await self.client.get(url, headers=self._get_headers(), follow_redirects=True)
+            response = await self.http.get(url, headers=self._get_headers(), follow_redirects=True)
             response.raise_for_status()
             events = response.json()
 
@@ -158,7 +159,7 @@ class GitHubScraper(BaseScraper):
             id=self._generate_id("github", "event", event_id),
             source_type=SourceType.GITHUB,
             title=title,
-            url=repo_url,
+            url=HttpUrl(repo_url),
             content=content,
             author=username,
             published_at=created_at,
@@ -188,7 +189,7 @@ class GitHubScraper(BaseScraper):
         items = []
 
         try:
-            response = await self.client.get(url, headers=self._get_headers(), follow_redirects=True)
+            response = await self.http.get(url, headers=self._get_headers(), follow_redirects=True)
             response.raise_for_status()
             releases = response.json()
 

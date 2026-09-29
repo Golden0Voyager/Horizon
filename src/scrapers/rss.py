@@ -73,7 +73,7 @@ class RSSScraper(BaseScraper):
             )
 
             # Fetch feed content
-            response = await self.client.get(feed_url, follow_redirects=True)
+            response = await self.http.get(feed_url, follow_redirects=True)
             response.raise_for_status()
 
             # Parse feed
@@ -118,7 +118,7 @@ class RSSScraper(BaseScraper):
 
         return items
 
-    def _parse_date(self, entry: dict) -> datetime:
+    def _parse_date(self, entry: dict) -> datetime | None:
         """Parse publication date from feed entry.
 
         Args:
@@ -155,11 +155,11 @@ class RSSScraper(BaseScraper):
         """
         # Try different content fields
         if "summary" in entry:
-            return entry.summary
+            return entry["summary"]
         if "description" in entry:
-            return entry.description
-        if "content" in entry and entry.content:
+            return entry["description"]
+        if "content" in entry and entry["content"]:
             # content is usually a list
-            return entry.content[0].get("value", "")
+            return entry["content"][0].get("value", "")
 
         return ""

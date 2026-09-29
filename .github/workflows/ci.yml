@@ -14,14 +14,14 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10
 
       - name: Set up Python
         run: uv python install 3.12
@@ -33,7 +33,7 @@ jobs:
         run: uv run ruff check src/ tests/
 
       - name: Run mypy
-        run: uv run mypy src/ || true
+        run: uv run mypy src/
 
       - name: Run tests with coverage
         run: uv run pytest --cov --cov-report=term-missing --timeout=30 tests/
@@ -44,14 +44,14 @@ jobs:
   test-e2e-playwright:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: Playwright Layer 2 (nightly + manual)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10
 
       - name: Set up Python
         run: uv python install 3.12

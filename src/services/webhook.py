@@ -231,10 +231,10 @@ class WebhookNotifier:
                     def print(self, *args, **kwargs):
                         print(*args, **kwargs)
 
-                self.console = DummyConsole()
+                self.console = cast("Console", DummyConsole())
         else:
             self.console = console
-        self.url = None
+        self.url: str | None = None
         self._validate_config()  # sets self.url or raises ValueError
 
     def _validate_url(self, url: str) -> str:

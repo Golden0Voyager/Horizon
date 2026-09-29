@@ -129,7 +129,7 @@ class AnthropicClient(AIClient):
 
         api_key = _resolve_api_key(config)
 
-        kwargs = {"api_key": api_key}
+        kwargs: dict[str, Any] = {"api_key": api_key}
         if config.base_url:
             kwargs["base_url"] = config.base_url
 
@@ -173,7 +173,7 @@ class AnthropicClient(AIClient):
                 input_tokens=getattr(usage, "input_tokens", 0),
                 output_tokens=getattr(usage, "output_tokens", 0),
             )
-        return message.content[0].text
+        return message.content[0].text  # type: ignore[union-attr]  # first block is TextBlock for plain completions
 
 
 class OpenAIClient(AIClient):
@@ -213,7 +213,7 @@ class OpenAIClient(AIClient):
         fallback = "no_key" if config.provider == AIProvider.OLLAMA else None
         api_key = _resolve_api_key(config, fallback=fallback)
 
-        kwargs = {"api_key": api_key}
+        kwargs: dict[str, Any] = {"api_key": api_key}
         base_url = config.base_url or self._DEFAULT_BASE_URLS.get(config.provider.value)
         if base_url:
             kwargs["base_url"] = base_url
@@ -292,7 +292,7 @@ class OpenAIClient(AIClient):
         max_tokens: int,
         include_temperature: bool,
     ):
-        request_kwargs = {
+        request_kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
@@ -420,7 +420,7 @@ class AzureOpenAIClient(AIClient):
         max_tokens: int,
         use_max_completion_tokens: bool,
     ):
-        tokens_kwarg = (
+        tokens_kwarg: dict[str, Any] = (
             {"max_completion_tokens": max_tokens}
             if use_max_completion_tokens
             else {"max_tokens": max_tokens}
@@ -501,7 +501,7 @@ class GeminiClient(AIClient):
             prompt = getattr(usage, "prompt_token_count", 0) or 0
             completion = max(0, total - prompt)
             record_usage("gemini", input_tokens=prompt, output_tokens=completion)
-        return response.text
+        return response.text or ""
 
 
 def _create_single_client(config: AIConfig) -> AIClient:
@@ -606,7 +606,7 @@ def _create_chained_client(config: AIConfig) -> ChainedAIClient:
     """Build a ChainedAIClient from a comma-separated provider chain."""
     from ..models import AI_PROVIDER_DEFAULTS
 
-    provider_names = [p.strip() for p in config.provider_chain.split(",") if p.strip()]
+    provider_names = [p.strip() for p in (config.provider_chain or "").split(",") if p.strip()]
     if not provider_names:
         raise ValueError("provider_chain is empty")
 

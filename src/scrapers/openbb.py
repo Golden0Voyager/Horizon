@@ -33,6 +33,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from pydantic import HttpUrl
 
 from ..models import ContentItem, OpenBBConfig, OpenBBWatchlist, SourceType
 from .base import BaseScraper
@@ -120,6 +121,7 @@ class OpenBBScraper(BaseScraper):
         since_utc: datetime,
     ) -> list[ContentItem]:
         """Fetch news for one watchlist via ``obb.news.company()``."""
+        assert self._obb is not None  # callers guard ``if not self._obb`` beforehand
         symbols_param = ",".join(watchlist.symbols)
         response = await asyncio.to_thread(
             self._obb.news.company,
@@ -176,7 +178,7 @@ class OpenBBScraper(BaseScraper):
             id=self._generate_id("openbb", "news", native_id),
             source_type=self.SOURCE_TYPE,
             title=title,
-            url=url,
+            url=HttpUrl(url),
             content=body,
             author=author or (symbols[0] if symbols else None),
             published_at=published,

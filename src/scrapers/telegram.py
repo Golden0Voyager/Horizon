@@ -7,6 +7,7 @@ from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup
+from pydantic import HttpUrl
 
 from ..models import ContentItem, SourceType, TelegramChannelConfig, TelegramConfig
 from .base import BaseScraper
@@ -49,12 +50,12 @@ class TelegramScraper(BaseScraper):
         url = f"{TELEGRAM_WEB_BASE}/{cfg.channel}"
         headers = {"User-Agent": USER_AGENT}
         try:
-            response = await self.client.get(url, headers=headers, follow_redirects=True, timeout=120.0)
+            response = await self.http.get(url, headers=headers, follow_redirects=True, timeout=120.0)
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 5))
                 logger.warning("Telegram rate limited for %s, retrying after %ds", cfg.channel, retry_after)
                 await asyncio.sleep(retry_after)
-                response = await self.client.get(url, headers=headers, follow_redirects=True, timeout=120.0)
+                response = await self.http.get(url, headers=headers, follow_redirects=True, timeout=120.0)
             response.raise_for_status()
         except Exception as e:
             logger.warning("Telegram request failed for %s: [%s] %r", cfg.channel, type(e).__name__, e)
@@ -126,7 +127,7 @@ class TelegramScraper(BaseScraper):
             id=self._generate_id("telegram", channel, msg_id),
             source_type=SourceType.TELEGRAM,
             title=title,
-            url=canonical_url,
+            url=HttpUrl(canonical_url),
             content=text,
             author=channel,
             published_at=published_at,

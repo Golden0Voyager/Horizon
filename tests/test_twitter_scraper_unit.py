@@ -537,7 +537,7 @@ class _FakePage:
         # call inside ``_scrape_user``. We record the handler so that
         # ``dispatch_route`` can synthesize fake ``Route`` instances for
         # representative URLs / resource_types and observe whether
-        # ``route.abort()`` or ``route.continue_()`` was called.
+        # ``route.abort()`` or ``route.fallback()`` was called.
         self._route_handlers.append((pattern, handler))
 
     async def reload(self, **kw: Any) -> None:
@@ -563,7 +563,7 @@ class _FakePage:
         """Invoke every registered route handler with a ``_FakeRoute`` matching
         ``(url, resource_type)``. Mirrors how Playwright would invoke
         ``route_handler(route)`` when the actual request matches the
-        pattern. Each handler's ``route.abort()`` / ``route.continue_()``
+        pattern. Each handler's ``route.abort()`` / ``route.fallback()``
         call is recorded onto ``route_aborted`` / ``route_continued``.
         """
         for _pattern, handler in list(self._route_handlers):
@@ -599,7 +599,7 @@ class _FakeRoute:
 
     Production's ``route_handler`` reads ``route.request.resource_type``
     and ``route.request.url`` then calls ``await route.abort()`` or
-    ``await route.continue_()``. Both decisions get appended onto the
+    ``await route.fallback()``. Both decisions get appended onto the
     supplied lists so tests can assert which URLs were blocked.
     """
 
@@ -618,6 +618,14 @@ class _FakeRoute:
         self._aborted.append((self.request.url, self.request.resource_type))
 
     async def continue_(self) -> None:
+        self._continued.append((self.request.url, self.request.resource_type))
+
+    async def fallback(self) -> None:
+        # Production's pass-through branch now calls ``route.fallback()`` (not
+        # ``continue_()``) so that context-level routes registered by Layer 2
+        # tests can still intercept. In this fake there is no next handler, so
+        # a fallback is observationally "not aborted" — record it on the same
+        # pass-through list ``continue_()`` used.
         self._continued.append((self.request.url, self.request.resource_type))
 
 

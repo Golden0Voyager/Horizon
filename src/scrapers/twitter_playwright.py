@@ -70,7 +70,10 @@ class TwitterPlaywrightScraper(BaseScraper):
         if not self.twitter_config.enabled:
             return []
 
-        users = [u.strip().lstrip("@") for u in self.twitter_config.users if u.strip()]
+        # ``if u.strip().lstrip("@")`` drops names that become empty after
+        # stripping (e.g. ``"@"``), so a users list containing only such
+        # entries short-circuits instead of launching a browser.
+        users = [u.strip().lstrip("@") for u in self.twitter_config.users if u.strip().lstrip("@")]
         if not users:
             logger.debug("No Twitter users configured, skipping.")
             return []
@@ -256,7 +259,11 @@ class TwitterPlaywrightScraper(BaseScraper):
                 if any(k in url for k in ("google-analytics", "doubleclick", "scribe.twitter.com")):
                     await route.abort()
                 else:
-                    await route.continue_()
+                    # fallback() (not continue_()) so context-level routes registered
+                    # on the browser context can still intercept. With no context
+                    # routes present (production), fallback() proceeds to the real
+                    # network, matching continue_() behaviour.
+                    await route.fallback()
 
         await page.route("**/*", route_handler)
 

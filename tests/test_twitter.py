@@ -581,6 +581,15 @@ def test_fetch_replies_all_below_min_likes_returns_empty(monkeypatch):
 # Layer 2 — fetch() end-to-end with real chromium
 # ---------------------------------------------------------------------------
 
+# Stubbed x.com HTML shell. The inline script mirrors the GraphQL call the real
+# page would make, so the canned ``**/UserTweets*`` context route below is
+# actually requested and captured by the scraper's response listener.
+_STUB_X_DOC_BODY = (
+    "<!DOCTYPE html><html><body><div>stub</div>"
+    '<script>fetch("https://x.com/i/api/graphql/STUB/UserTweets?variables=%7B%7D");'
+    "</script></body></html>"
+)
+
 
 @pytest.mark.requires_playwright
 def test_fetch_end_to_end_routes_graphql(tmp_path, fast_twitter_waits, monkeypatch):
@@ -611,9 +620,13 @@ def test_fetch_end_to_end_routes_graphql(tmp_path, fast_twitter_waits, monkeypat
     orig_scrape = scraper._scrape_user
 
     async def _mock_scrape(ctx, username, since):
+        # Registration order matters: context routes run in reverse
+        # registration order, so the specific GraphQL stubs are registered
+        # last and therefore win for API URLs; the x.com catch-all serves the
+        # document navigation only.
         await ctx.route(
-            "**/UserTweets*",
-            lambda route: route.fulfill(json=canned, status=200),
+            "https://x.com/**",
+            lambda route: route.fulfill(status=200, content_type="text/html", body=_STUB_X_DOC_BODY),
         )
         await ctx.route(
             "**/UserByScreenName*",
@@ -622,15 +635,9 @@ def test_fetch_end_to_end_routes_graphql(tmp_path, fast_twitter_waits, monkeypat
                 status=200,
             ),
         )
-        # Stub the x.com HTML shell so page.goto + the polling loop's body_text
-        # evaluate don't depend on real network state.
         await ctx.route(
-            "https://x.com/**",
-            lambda route: route.fulfill(
-                status=200,
-                content_type="text/html",
-                body="<!DOCTYPE html><html><body><div>stub</div></body></html>",
-            ),
+            "**/UserTweets*",
+            lambda route: route.fulfill(json=canned, status=200),
         )
         return await orig_scrape(ctx, username, since)
 
@@ -674,9 +681,13 @@ def test_filters_old_tweets_layer2(tmp_path, fast_twitter_waits, monkeypatch):
     orig_scrape = scraper._scrape_user
 
     async def _mock_scrape(ctx, username, since):
+        # Registration order matters: context routes run in reverse
+        # registration order, so the specific GraphQL stubs are registered
+        # last and therefore win for API URLs; the x.com catch-all serves the
+        # document navigation only.
         await ctx.route(
-            "**/UserTweets*",
-            lambda route: route.fulfill(json=canned, status=200),
+            "https://x.com/**",
+            lambda route: route.fulfill(status=200, content_type="text/html", body=_STUB_X_DOC_BODY),
         )
         await ctx.route(
             "**/UserByScreenName*",
@@ -686,12 +697,8 @@ def test_filters_old_tweets_layer2(tmp_path, fast_twitter_waits, monkeypatch):
             ),
         )
         await ctx.route(
-            "https://x.com/**",
-            lambda route: route.fulfill(
-                status=200,
-                content_type="text/html",
-                body="<!DOCTYPE html><html><body><div>stub</div></body></html>",
-            ),
+            "**/UserTweets*",
+            lambda route: route.fulfill(json=canned, status=200),
         )
         return await orig_scrape(ctx, username, since)
 

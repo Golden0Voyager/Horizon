@@ -125,7 +125,7 @@ AI_PROVIDER_DEFAULTS = {
         "api_key_env": "SILICONFLOW_API_KEY",
     },
     AIProvider.NVIDIA: {
-        "model": "meta/llama-3.1-8b-instruct",
+        "model": "nvidia/nemotron-3-super-120b-a12b",
         "api_key_env": "NVIDIA_API_KEY",
     },
     AIProvider.SENSENOVA: {

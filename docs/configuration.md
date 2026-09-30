@@ -36,6 +36,7 @@ Common API key variable names:
 | Aliyun DashScope | `DASHSCOPE_API_KEY` |
 | Doubao | `DOUBAO_API_KEY` |
 | DeepSeek | `DEEPSEEK_API_KEY` |
+| NVIDIA NIM | `NVIDIA_API_KEY` |
 
 **Anthropic Claude**:
 
@@ -122,6 +123,36 @@ Available models: `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`
 ```
 
 Use the [DashScope compatible-mode](https://help.aliyun.com/zh/dashscope/developer-reference/use-dashscope-by-calling-openai-api) endpoint. Set `DASHSCOPE_API_KEY` in your `.env`. Optional: set `base_url` to override the default `https://dashscope.aliyuncs.com/compatible-mode/v1`.
+
+**NVIDIA NIM** (free tier, OpenAI-compatible):
+
+```json
+{
+  "ai": {
+    "provider": "nvidia",
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "api_key_env": "NVIDIA_API_KEY",
+    "throttle_sec": 0
+  }
+}
+```
+
+Set `NVIDIA_API_KEY` in your `.env` (get one at [build.nvidia.com](https://build.nvidia.com)). The free tier allows ~40 requests/minute with no credit card required.
+
+Verified working models (as of 2026-09-26):
+
+| Model | Notes |
+|---|---|
+| `nvidia/nemotron-3-super-120b-a12b` | **Default** — MoE 120B, best quality |
+| `nvidia/nemotron-3-ultra-550b-a55b` | MoE 550B, largest available |
+| `openai/gpt-oss-20b` | OpenAI open-source 20B |
+| `z-ai/glm-5.3` | Z.AI GLM-5.3 |
+| `z-ai/glm-5.3-flash` | GLM-5.3 faster variant |
+| `moonshotai/kimi-k3` | Moonshot Kimi K3 |
+| `meta/llama-3.2-11b-vision-instruct` | Llama 3.2 11B multimodal |
+| `google/gemma-4-31b-it` | Google Gemma 4 31B instruction-tuned |
+
+See [docs/models/nvidia.md](../docs/models/nvidia.md) for the full list including models that have been deprecated.
 
 ### AI throttling
 

@@ -31,6 +31,8 @@ import pytest
 
 from src.mcp.errors import HorizonMcpError
 from src.mcp.service import HorizonPipelineService
+from src.models import WebhookConfig
+from src.services.webhook import WebhookDeliveryResult, WebhookDeliveryStatus
 
 
 @pytest.fixture(name="hz_mcp_service_root")
@@ -166,10 +168,11 @@ def test_hz_mcp_service_score_distribution_bins_each_bucket() -> None:
         SimpleNamespace(ai_score=0.0),
     ]
     buckets = HorizonPipelineService._score_distribution(items)
-    # Note: ``None`` ai_score becomes 0.0 via ``item.ai_score or 0.0``, joining
-    # the 0-2 bucket together with the explicit 0.0/1.5/2.99 entries.
+    # Merged (upstream) semantics: ``ai_score=None`` counts as ``unscored``
+    # instead of joining the 0-2 bucket.
     assert buckets == {
-        "0-2": 4,
+        "unscored": 1,
+        "0-2": 3,
         "3-4": 2,
         "5-6": 2,
         "7-8": 2,
@@ -179,6 +182,7 @@ def test_hz_mcp_service_score_distribution_bins_each_bucket() -> None:
 
 def test_hz_mcp_service_score_distribution_handles_empty() -> None:
     assert HorizonPipelineService._score_distribution([]) == {
+        "unscored": 0,
         "0-2": 0,
         "3-4": 0,
         "5-6": 0,
@@ -294,7 +298,7 @@ def test_hz_mcp_service_send_webhook_disabled(
         runtime: object
         config: object
 
-    webhook_cfg = SimpleNamespace(enabled=False)
+    webhook_cfg = WebhookConfig(enabled=False)
     cfg = SimpleNamespace(webhook=webhook_cfg)
 
     monkeypatch.setattr(
@@ -309,8 +313,9 @@ def test_hz_mcp_service_send_webhook_disabled(
 
     import asyncio
     result = asyncio.run(hz_mcp_service_root.send_webhook(date="2026-01-01"))
+    # Merged (upstream) shape: the delivery record is spread into the result.
     assert result["sent"] is False
-    assert "not enabled" in result["reason"].lower()
+    assert result["status"] == "disabled"
 
 
 def test_hz_mcp_service_send_webhook_no_config(
@@ -370,11 +375,15 @@ def test_hz_mcp_service_send_webhook_sends(
     sent_vars = []
 
     class FakeNotifier:
-        def __init__(self, config):
+        def __init__(self, config, console=None, icons=None):
             pass
 
         async def notify(self, variables):
             sent_vars.append(variables)
+            return WebhookDeliveryResult(
+                status=WebhookDeliveryStatus.SUCCESS,
+                status_code=200,
+            )
 
     monkeypatch.setattr("src.mcp.service.WebhookNotifier", FakeNotifier)
 

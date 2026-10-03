@@ -1,369 +1,333 @@
-"""Phase 6 unit tests for ``src.setup.wizard`` — pure-Python helpers.
-
-The interactive prompt-driven ``configure_ai`` / ``get_interests`` /
-``select_sources`` / ``main`` cannot be unit-tested without mocking rich /
-stdin. We focus on the deterministic assembly helpers:
-
-- ``build_config``: ``selected_sources`` list → valid ``Config``.
-- ``merge_configs``: dedup by URL/subreddit key, preserve ``enabled`` flag.
-- ``_gh_key``: per-type key generation.
-- ``_count_sources``: counts enabled sources by type.
-
-All tests construct ``AIConfig`` programmatically and round-trip through
-``Config.model_validate`` to confirm structural correctness.
-"""
-
 from __future__ import annotations
 
 import pytest
 
-from src.models import (
-    AIConfig,
-    AIProvider,
-    Config,
-    FilteringConfig,
-    SourcesConfig,
-)
-from src.setup.wizard import _count_sources, _gh_key, build_config, merge_configs
+from src.models import AIConfig, AIProvider, Config
+from src.setup import wizard
 
 
-@pytest.fixture
-def ai_config() -> AIConfig:
-    return AIConfig(provider=AIProvider.OPENAI, model="deepseek-chat", api_key_env="OPENAI_API_KEY")
+class _StopWizard(Exception):  # noqa: N818
+    """Raised by a stubbed load_presets() to short-circuit main() for tests."""
 
+
+def _prepare_main(monkeypatch, load_presets_calls):
+    """Wire main() up to run until the preset-loading step, then stop."""
+
+    def fake_load_presets(**kwargs):
+        load_presets_calls.append(kwargs)
+        raise _StopWizard()
+
+    monkeypatch.setattr(wizard, "configure_logging", lambda console, level=None: None)
+    monkeypatch.setattr(wizard.console, "print", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        wizard,
+        "configure_ai",
+        lambda: AIConfig(provider=AIProvider.OLLAMA, model="llama3.1", api_key_env=""),
+    )
+    monkeypatch.setattr(wizard, "get_interests", lambda: "test interests")
+    monkeypatch.setattr(wizard, "load_presets", fake_load_presets)
+
+
+def test_configure_ai_allows_ollama_without_api_key(monkeypatch):
+    answers = iter(
+        [
+            "ollama",
+            "llama3.2",
+            "http://nas.local:11434",
+            "",
+            "zh,en",
+        ]
+    )
+
+    prompt_consoles = []
+
+    def answer_prompt(*args, **kwargs):
+        prompt_consoles.append(kwargs.get("console"))
+        return next(answers)
+
+    monkeypatch.setattr(wizard.Prompt, "ask", answer_prompt)
+    monkeypatch.setattr(wizard.console, "print", lambda *args, **kwargs: None)
+
+    config = wizard.configure_ai()
+
+    assert config == AIConfig(
+        provider=AIProvider.OLLAMA,
+        model="llama3.2",
+        base_url="http://nas.local:11434",
+        api_key_env="",
+        temperature=0.3,
+        max_tokens=8192,
+        languages=["zh", "en"],
+    )
+    assert prompt_consoles == [wizard.console] * 5
+
+
+def test_ai_recommendations_available_for_ollama_without_api_key():
+    config = AIConfig(
+        provider=AIProvider.OLLAMA,
+        model="llama3.1",
+        api_key_env="",
+    )
+
+    assert wizard._ai_recommendations_available(config) is True
+
+
+def test_ai_recommendations_require_api_key_for_cloud_provider(monkeypatch):
+    config = AIConfig(
+        provider=AIProvider.OPENAI,
+        model="gpt-4",
+        api_key_env="OPENAI_API_KEY",
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    assert wizard._ai_recommendations_available(config) is False
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    assert wizard._ai_recommendations_available(config) is True
+
+
+def test_build_config_hackernews_follows_selection_and_count():
+    ai = AIConfig(provider=AIProvider.OLLAMA, model="llama3.1", api_key_env="")
+
+    rss_config = wizard.build_config(
+        ai,
+        [{"type": "rss", "config": {"name": "News", "url": "https://example.com/feed"}}],
+    )
+    default_config = wizard.build_config(ai, [])
+
+    assert rss_config.sources.hackernews.enabled is False
+    assert wizard._count_sources(rss_config) == 1
+    assert default_config.sources.hackernews.enabled is True
+    assert wizard._count_sources(default_config) == 1
+    assert default_config.processing.profile_settings["tech-news"].threshold == 7.0
+    assert default_config.processing.profile_settings["tech-blog"].topic_dedup is False
+    assert default_config.digest.profile_order == [
+        "tech-news",
+        "tech-blog",
+        "finance-news",
+    ]
+
+
+def test_merge_configs_preserves_all_existing_configuration_and_deduplicates_lists():
+    existing = Config.model_validate(
+        {
+            "ai": {"provider": "openai", "model": "old", "api_key_env": "OLD_KEY"},
+            "collection": {"time_window_hours": 36},
+            "digest": {"max_items": 9},
+            "extractors": {"html": {"type": "trafilatura", "favor_precision": True}},
+            "email": {
+                "imap_server": "imap.example.com", "smtp_server": "smtp.example.com",
+                "email_address": "alerts@example.com", "enabled": True,
+            },
+            "webhook": {"url_env": "WEBHOOK_URL", "enabled": True},
+            "sources": {
+                "github": [
+                    {"type": "user_events", "username": "alice", "enabled": False, "category": "old"},
+                    {"type": "repo_releases", "owner": "acme", "repo": "core", "enabled": True},
+                ],
+                "hackernews": {"enabled": False, "fetch_top_stories": 77, "min_score": 12},
+                "rss": [{"name": "Old", "url": "https://example.com/feed", "enabled": False}],
+                "reddit": {
+                    "enabled": False, "fetch_comments": 42,
+                    "subreddits": [{"subreddit": "python", "enabled": False, "min_score": 99}],
+                    "users": [{"username": "spez", "enabled": False, "fetch_limit": 3}],
+                },
+                "telegram": {
+                    "enabled": False,
+                    "channels": [{"channel": "updates", "enabled": False, "fetch_limit": 7}],
+                },
+                "twitter": {"enabled": True, "users": ["openai"], "fetch_limit": 4},
+                "openbb": {"enabled": True, "watchlists": [{"name": "tech", "symbols": ["NVDA"]}]},
+                "ossinsight": {"enabled": True, "keywords": ["agent"], "max_items": 8},
+                "gdelt": {"enabled": True, "query": "robotics", "max_records": 13},
+                "google_news": {"enabled": True, "query": "semiconductors", "country": "GB"},
+            },
+        }
+    )
+    new = wizard.build_config(
+        AIConfig(provider=AIProvider.OLLAMA, model="new", api_key_env=""),
+        [
+            {"type": "github_user", "config": {"username": "alice"}},
+            {"type": "github_user", "config": {"username": "alice"}},
+            {"type": "rss", "config": {"name": "New", "url": "https://example.com/feed"}},
+            {"type": "reddit_subreddit", "config": {"subreddit": "python"}},
+            {"type": "reddit_user", "config": {"username": "spez"}},
+            {"type": "telegram", "config": {"channel": "updates"}},
+        ],
+    )
+
+    merged = wizard.merge_configs(new, existing)
+
+    assert merged.extractors == existing.extractors
+    assert merged.email == existing.email
+    assert merged.webhook == existing.webhook
+    assert merged.ai == new.ai
+    assert merged.collection == existing.collection
+    assert merged.digest == existing.digest
+    for name in ("hackernews", "twitter", "openbb", "ossinsight", "gdelt", "google_news"):
+        assert getattr(merged.sources, name) == getattr(existing.sources, name)
+    assert merged.sources.reddit.enabled is False
+    assert merged.sources.reddit.fetch_comments == 42
+    assert merged.sources.telegram.enabled is False
+    assert len(merged.sources.github) == 2
+    assert len(merged.sources.rss) == 1
+    assert len(merged.sources.reddit.subreddits) == 1
+    assert len(merged.sources.reddit.users) == 1
+    assert len(merged.sources.telegram.channels) == 1
+    assert merged.sources.github[0].enabled is False
+    assert merged.sources.github[0].category == "old"
+    assert merged.sources.rss[0].enabled is False
+    assert merged.sources.rss[0].name == "Old"
+    assert merged.sources.reddit.subreddits[0].enabled is False
+    assert merged.sources.reddit.subreddits[0].min_score == 99
+    assert merged.sources.reddit.users[0].enabled is False
+    assert merged.sources.reddit.users[0].fetch_limit == 3
+    assert merged.sources.telegram.channels[0].enabled is False
+    assert merged.sources.telegram.channels[0].fetch_limit == 7
+
+
+def test_data_dir_and_config_flags_are_forwarded_to_storage_and_presets(monkeypatch, tmp_path):
+    data_dir = tmp_path / "state"
+    data_dir.mkdir()
+    (data_dir / "presets.json").touch()
+    config_path = tmp_path / "custom" / "horizon.json"
+    storage_calls = []
+    load_presets_calls = []
+
+    class RecordingStorage:
+        def __init__(self, data_dir, config_path):
+            storage_calls.append({"data_dir": data_dir, "config_path": config_path})
+
+    _prepare_main(monkeypatch, load_presets_calls)
+    monkeypatch.setattr(wizard, "StorageManager", RecordingStorage)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["horizon-wizard", "--data-dir", str(data_dir), "--config", str(config_path)],
+    )
+
+    with pytest.raises(_StopWizard):
+        wizard.main()
+
+    assert storage_calls == [{"data_dir": str(data_dir), "config_path": str(config_path)}]
+    assert load_presets_calls == [
+        {"presets_path": str(data_dir / "presets.json"), "prefer_api": True}
+    ]
+
+
+def test_data_dir_and_config_default_to_data_directory(monkeypatch):
+    storage_calls = []
+    load_presets_calls = []
+
+    class RecordingStorage:
+        def __init__(self, data_dir, config_path):
+            storage_calls.append({"data_dir": data_dir, "config_path": config_path})
+
+    _prepare_main(monkeypatch, load_presets_calls)
+    monkeypatch.setattr(wizard, "StorageManager", RecordingStorage)
+    monkeypatch.setattr("sys.argv", ["horizon-wizard"])
+
+    with pytest.raises(_StopWizard):
+        wizard.main()
+
+    assert storage_calls == [{"data_dir": "data", "config_path": None}]
+    assert load_presets_calls == [{"presets_path": "data/presets.json", "prefer_api": True}]
+
+
+def test_missing_custom_presets_falls_back_to_bundled_file(monkeypatch, tmp_path):
+    load_presets_calls = []
+
+    class RecordingStorage:
+        def __init__(self, data_dir, config_path):
+            pass
+
+    _prepare_main(monkeypatch, load_presets_calls)
+    monkeypatch.setattr(wizard, "StorageManager", RecordingStorage)
+    monkeypatch.setattr(
+        "sys.argv", ["horizon-wizard", "--data-dir", str(tmp_path / "state")]
+    )
+
+    with pytest.raises(_StopWizard):
+        wizard.main()
+
+    assert load_presets_calls == [
+        {"presets_path": "data/presets.json", "prefer_api": True}
+    ]
+
+
+def test_log_level_flag_is_forwarded_to_configure_logging(monkeypatch):
+    logging_calls = []
+    load_presets_calls = []
+
+    class RecordingStorage:
+        def __init__(self, data_dir, config_path):
+            pass
+
+    _prepare_main(monkeypatch, load_presets_calls)
+    monkeypatch.setattr(wizard, "StorageManager", RecordingStorage)
+    monkeypatch.setattr(
+        wizard,
+        "configure_logging",
+        lambda console, level=None: logging_calls.append(level),
+    )
+    monkeypatch.setattr("sys.argv", ["horizon-wizard", "--log-level", "debug"])
+
+    with pytest.raises(_StopWizard):
+        wizard.main()
+
+    assert logging_calls == ["DEBUG"]
 
 # ---------------------------------------------------------------------------
-# _gh_key
+# Fork-preserved helper tests (pure functions, unchanged by the merge)
 # ---------------------------------------------------------------------------
+
+from src.models import GitHubSourceConfig  # noqa: E402
+from src.setup.wizard import _count_sources, _gh_key  # noqa: E402
 
 
 def test_gh_key_user_events() -> None:
-    from src.models import GitHubSourceConfig
-
     src = GitHubSourceConfig(type="user_events", username="alice")
     assert _gh_key(src) == "user:alice"
 
 
 def test_gh_key_repo_releases() -> None:
-    from src.models import GitHubSourceConfig
-
     src = GitHubSourceConfig(type="repo_releases", owner="x", repo="y")
     assert _gh_key(src) == "repo:x/y"
 
 
-# ---------------------------------------------------------------------------
-# build_config
-# ---------------------------------------------------------------------------
+def _minimal_full_config() -> Config:
+    return Config.model_validate({
+        "ai": {
+            "provider": "openai",
+            "model": "deepseek-chat",
+            "api_key_env": "OPENAI_API_KEY",
+        },
+        "sources": {"hackernews": {"enabled": True}},
+    })
 
 
-def test_build_config_empty_selected_yields_hackernews_only(
-    ai_config: AIConfig,
-) -> None:
-    cfg = build_config(ai_config, [])
-    assert isinstance(cfg, Config)
-    # HackerNews is always-on default.
-    assert cfg.sources.hackernews.enabled is True
-    assert cfg.sources.github == []
-    assert cfg.sources.rss == []
+def test_count_sources_hackernews_counts_one() -> None:
+    config = _minimal_full_config()
+    assert _count_sources(config) == 1
 
 
-def test_build_config_includes_github_user_source(
-    ai_config: AIConfig,
-) -> None:
-    sels = [
-        {
-            "type": "github_user",
-            "description": "follow alice",
-            "config": {"username": "alice"},
-        }
-    ]
-    cfg = build_config(ai_config, sels)
-    assert len(cfg.sources.github) == 1
-    assert cfg.sources.github[0].username == "alice"
-    assert cfg.sources.github[0].type == "user_events"
-    assert cfg.sources.github[0].enabled is True
+def test_count_sources_zero_when_all_disabled() -> None:
+    config = Config.model_validate({
+        "ai": {
+            "provider": "openai",
+            "model": "deepseek-chat",
+            "api_key_env": "OPENAI_API_KEY",
+        },
+        "sources": {"hackernews": {"enabled": False}},
+    })
+    assert _count_sources(config) == 0
 
 
-def test_build_config_includes_github_repo_source(
-    ai_config: AIConfig,
-) -> None:
-    sels = [
-        {
-            "type": "github_repo",
-            "description": "track tokio",
-            "config": {"owner": "tokio-rs", "repo": "tokio"},
-        }
-    ]
-    cfg = build_config(ai_config, sels)
-    assert len(cfg.sources.github) == 1
-    assert cfg.sources.github[0].type == "repo_releases"
-    assert cfg.sources.github[0].owner == "tokio-rs"
-    assert cfg.sources.github[0].repo == "tokio"
+def test_merge_configs_preserves_existing_enabled_for_dup() -> None:
+    base = _minimal_full_config()
+    incoming = _minimal_full_config()
+    base.sources.hackernews.enabled = False
+    incoming.sources.hackernews.enabled = True
 
+    merged = wizard.merge_configs(incoming, base)
 
-def test_build_config_includes_rss_source(
-    ai_config: AIConfig,
-) -> None:
-    sels = [
-        {
-            "type": "rss",
-            "description": "python weekly",
-            "config": {"name": "PW", "url": "https://pyweekly.com/rss", "category": "py"},
-        }
-    ]
-    cfg = build_config(ai_config, sels)
-    assert len(cfg.sources.rss) == 1
-    src = cfg.sources.rss[0]
-    assert str(src.url) == "https://pyweekly.com/rss"
-    assert src.name == "PW"
-    assert src.category == "py"
-    assert src.enabled is True
-
-
-def test_build_config_includes_reddit_subreddit_source(
-    ai_config: AIConfig,
-) -> None:
-    sels = [
-        {
-            "type": "reddit_subreddit",
-            "description": "python subreddit",
-            "config": {"subreddit": "python", "sort": "new", "fetch_limit": 10, "min_score": 30},
-        }
-    ]
-    cfg = build_config(ai_config, sels)
-    assert cfg.sources.reddit.enabled is True
-    assert len(cfg.sources.reddit.subreddits) == 1
-    sub = cfg.sources.reddit.subreddits[0]
-    assert sub.subreddit == "python"
-    assert sub.sort == "new"
-    assert sub.fetch_limit == 10
-    assert sub.min_score == 30
-
-
-def test_build_config_includes_reddit_user_source(
-    ai_config: AIConfig,
-) -> None:
-    sels = [
-        {
-            "type": "reddit_user",
-            "description": "u/bob",
-            "config": {"username": "bob"},
-        }
-    ]
-    cfg = build_config(ai_config, sels)
-    assert cfg.sources.reddit.enabled is True
-    assert len(cfg.sources.reddit.users) == 1
-    assert cfg.sources.reddit.users[0].username == "bob"
-
-
-def test_build_config_includes_telegram_channel_source(
-    ai_config: AIConfig,
-) -> None:
-    sels = [
-        {
-            "type": "telegram",
-            "description": "zaihuapd",
-            "config": {"channel": "zaihuapd", "fetch_limit": 25},
-        }
-    ]
-    cfg = build_config(ai_config, sels)
-    assert cfg.sources.telegram.enabled is True
-    assert len(cfg.sources.telegram.channels) == 1
-    assert cfg.sources.telegram.channels[0].channel == "zaihuapd"
-
-
-def test_build_config_reddit_disabled_when_no_subs_or_users(
-    ai_config: AIConfig,
-) -> None:
-    cfg = build_config(ai_config, [])
-    assert cfg.sources.reddit.enabled is False
-
-
-def test_build_config_always_includes_hackernews_default(
-    ai_config: AIConfig,
-) -> None:
-    sels = [{"type": "rss", "config": {"name": "x", "url": "https://x.com/rss"}}]
-    cfg = build_config(ai_config, sels)
-    # Even when other sources provided, HN should default to enabled.
-    assert cfg.sources.hackernews.enabled is True
-
-
-# ---------------------------------------------------------------------------
-# merge_configs
-# ---------------------------------------------------------------------------
-
-
-def _make_base_config() -> Config:
-    return Config(
-        version="1.0",
-        ai=AIConfig(provider=AIProvider.OPENAI, model="m", api_key_env="OPENAI_API_KEY"),
-        sources=SourcesConfig(
-            github=[
-                {"type": "user_events", "username": "alice", "enabled": True},
-                {"type": "user_events", "username": "bob", "enabled": False},
-            ],
-            hackernews=__import__("src.models", fromlist=["HackerNewsConfig"]).HackerNewsConfig(enabled=True),
-            rss=[
-                {"name": "feedA", "url": "https://a.com/rss", "enabled": True, "category": None},
-            ],
-            reddit=__import__("src.models", fromlist=["RedditConfig"]).RedditConfig(
-                enabled=True,
-                subreddits=[__import__("src.models", fromlist=["RedditSubredditConfig"]).RedditSubredditConfig(subreddit="python")],
-            ),
-            telegram=__import__("src.models", fromlist=["TelegramConfig"]).TelegramConfig(enabled=False),
-        ),
-        filtering=FilteringConfig(ai_score_threshold=7.0, time_window_hours=24),
-    )
-
-
-def test_merge_configs_dedups_github_by_id(
-    ai_config: AIConfig,
-) -> None:
-    base = _make_base_config()
-    new_config = build_config(ai_config, [
-        {"type": "github_user", "config": {"username": "alice"}},
-        {"type": "github_user", "config": {"username": "carol"}},
-    ])
-    merged = merge_configs(new_config, base)
-
-    usernames = [s.username for s in merged.sources.github]
-    assert usernames.count("alice") == 1
-    assert "carol" in usernames
-    assert "bob" in usernames  # preserved from existing config.
-
-
-def test_merge_configs_preserves_existing_enabled_for_dup(
-    ai_config: AIConfig,
-) -> None:
-    """A duplicate source should inherit the existing ``enabled`` value, not the new one."""
-
-    base = _make_base_config()
-    # In base, alice is enabled=True. Override via new_config with enabled=False.
-    new_config = build_config(ai_config, [
-        {"type": "github_user", "config": {"username": "alice"}},
-    ])
-    # Manually flip the merged.alice.enabled to False to simulate "user deselected".
-    new_config.sources.github[0].enabled = False
-
-    merged = merge_configs(new_config, base)
-
-    alice = next(s for s in merged.sources.github if s.username == "alice")
-    # Existing enabled state wins.
-    assert alice.enabled is True
-
-
-def test_merge_configs_dedups_rss_by_url(
-    ai_config: AIConfig,
-) -> None:
-    base = _make_base_config()
-    new_config = build_config(ai_config, [
-        {"type": "rss", "config": {"name": "feedA", "url": "https://a.com/rss"}},
-    ])
-    merged = merge_configs(new_config, base)
-
-    rss_urls = [str(s.url) for s in merged.sources.rss]
-    assert rss_urls.count("https://a.com/rss") == 1
-
-
-def test_merge_configs_dedups_reddit_subreddits(
-    ai_config: AIConfig,
-) -> None:
-    base = _make_base_config()
-    new_config = build_config(ai_config, [
-        {"type": "reddit_subreddit", "config": {"subreddit": "python"}},
-    ])
-    merged = merge_configs(new_config, base)
-
-    subs = [s.subreddit for s in merged.sources.reddit.subreddits]
-    assert subs.count("python") == 1
-
-
-def test_merge_configs_appends_new_subreddit(
-    ai_config: AIConfig,
-) -> None:
-    base = _make_base_config()
-    new_config = build_config(ai_config, [
-        {"type": "reddit_subreddit", "config": {"subreddit": "rust"}},
-    ])
-    merged = merge_configs(new_config, base)
-    subs = [s.subreddit for s in merged.sources.reddit.subreddits]
-    assert "python" in subs
-    assert "rust" in subs
-
-
-def test_merge_configs_ai_is_replaced(ai_config: AIConfig) -> None:
-    base = _make_base_config()
-    new_config = build_config(ai_config, [])
-    merged = merge_configs(new_config, base)
-    # AI model should be the new one.
-    assert merged.ai.model == "deepseek-chat"
-
-
-# ---------------------------------------------------------------------------
-# _count_sources
-# ---------------------------------------------------------------------------
-
-
-def test_count_sources_zero_when_all_disabled(
-    ai_config: AIConfig,
-) -> None:
-    from src.models import HackerNewsConfig, RedditConfig, SourcesConfig, TelegramConfig
-
-    cfg = Config(
-        version="1.0",
-        ai=ai_config,
-        sources=SourcesConfig(
-            hackernews=HackerNewsConfig(enabled=False),
-            reddit=RedditConfig(enabled=False),
-            telegram=TelegramConfig(enabled=False),
-        ),
-        filtering=FilteringConfig(ai_score_threshold=7.0, time_window_hours=24),
-    )
-    assert _count_sources(cfg) == 0
-
-
-def test_count_sources_hackernews_counts_one(
-    ai_config: AIConfig,
-) -> None:
-    cfg = build_config(ai_config, [])
-    # build_config always enables hn.
-    assert _count_sources(cfg) == 1
-
-
-def test_count_sources_reddit_subreddits_and_users(
-    ai_config: AIConfig,
-) -> None:
-    sels = [
-        {"type": "reddit_subreddit", "config": {"subreddit": "a"}},
-        {"type": "reddit_subreddit", "config": {"subreddit": "b"}},
-        {"type": "reddit_user", "config": {"username": "u"}},
-    ]
-    cfg = build_config(ai_config, sels)
-    # 1 HN + 2 subreddits + 1 user = 4
-    assert _count_sources(cfg) == 4
-
-
-def test_count_sources_telegram_channels(
-    ai_config: AIConfig,
-) -> None:
-    sels = [
-        {"type": "telegram", "config": {"channel": "x"}},
-        {"type": "telegram", "config": {"channel": "y"}},
-        {"type": "telegram", "config": {"channel": "z"}},
-    ]
-    cfg = build_config(ai_config, sels)
-    # 1 HN + 3 telegram channels = 4
-    assert _count_sources(cfg) == 4
-
-
-def test_count_sources_github_disabled_excluded(
-    ai_config: AIConfig,
-) -> None:
-    sels = [{"type": "github_user", "config": {"username": "alice"}}]
-    cfg = build_config(ai_config, sels)
-    # 1 HN + 1 github = 2 (github constructed as enabled=True).
-    assert _count_sources(cfg) == 2
-    # Now disable github sources → only HN counts.
-    for s in cfg.sources.github:
-        s.enabled = False
-    assert _count_sources(cfg) == 1
+    assert merged.sources.hackernews.enabled is False

@@ -17,10 +17,18 @@ in their default paths only — the test environment never produces real
 import asyncio
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 from src.ai.analyzer import ContentAnalyzer
 from src.models import ContentItem, SourceType
+from src.processing import ProfileRegistry
+
+
+def _load_profiles() -> ProfileRegistry:
+    return ProfileRegistry.load(
+        Path(__file__).resolve().parents[1] / "profiles", "tech-news"
+    )
 
 
 def _make_item(
@@ -38,6 +46,7 @@ def _make_item(
         url="https://example.com/post",
         content=content,
         author=author,
+        profile="tech-news",
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
         metadata=metadata or {},
     )
@@ -84,25 +93,25 @@ def test_parse_json_response_delegates_to_ai_utils():
 
 def test_get_throttle_sec_clamps_negative_to_zero():
     client = _FakeAIClient(throttle_sec=-1.0)
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     assert analyzer._get_throttle_sec() == 0.0
 
 
 def test_get_throttle_sec_returns_positive_value_unchanged():
     client = _FakeAIClient(throttle_sec=2.5)
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     assert analyzer._get_throttle_sec() == 2.5
 
 
 def test_get_concurrency_clamps_below_one_to_one():
     client = _FakeAIClient(analysis_concurrency=0)
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     assert analyzer._get_concurrency() == 1
 
 
 def test_get_concurrency_returns_positive_unchanged():
     client = _FakeAIClient(analysis_concurrency=4)
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     assert analyzer._get_concurrency() == 4
 
 
@@ -112,7 +121,7 @@ def test_get_throttle_sec_handles_missing_config_attribute():
     class _NoConfig:
         pass
 
-    analyzer = ContentAnalyzer(_NoConfig())
+    analyzer = ContentAnalyzer(_NoConfig(), _load_profiles())
     assert analyzer._get_throttle_sec() == 0.0
     assert analyzer._get_concurrency() == 1  # also uses default 1
 
@@ -125,7 +134,7 @@ def test_get_throttle_sec_handles_missing_config_attribute():
 def test_analyze_batch_does_not_sleep_when_throttle_zero(monkeypatch):
     """When ``throttle_sec=0``, no ``asyncio.sleep`` between items."""
     client = _FakeAIClient(throttle_sec=0.0)
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     sleep_calls = []
 
     async def fake_sleep(seconds):
@@ -152,7 +161,7 @@ def test_analyze_batch_does_not_sleep_when_throttle_zero(monkeypatch):
 def test_analyze_batch_sleeps_between_items_when_throttle_configured(monkeypatch):
     """When ``throttle_sec>0``, sleep between consecutive items."""
     client = _FakeAIClient(throttle_sec=1.5)
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     sleep_calls = []
 
     async def fake_sleep(seconds):
@@ -177,7 +186,7 @@ def test_analyze_batch_sleeps_between_items_when_throttle_configured(monkeypatch
 def test_analyze_batch_handles_exception_in_analyze_item(monkeypatch):
     """An exception inside ``_analyze_item`` sets score=0 and reason='Analysis failed'."""
     client = _FakeAIClient(analysis_concurrency=1)
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
 
     async def failing_analyze(item):
         raise RuntimeError("upstream blew up")
@@ -196,7 +205,7 @@ def test_analyze_batch_handles_exception_in_analyze_item(monkeypatch):
 def test_analyze_batch_does_not_sleep_after_last_item(monkeypatch):
     """Throttle is suppressed after the LAST item, even with throttle_sec > 0."""
     client = _FakeAIClient(throttle_sec=0.5)
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     sleep_calls = []
 
     async def fake_sleep(seconds):
@@ -220,7 +229,7 @@ def test_analyze_batch_does_not_sleep_after_last_item(monkeypatch):
 def test_analyze_batch_concurrent_processing(monkeypatch):
     """Verify that higher concurrency allows overlapping item processing."""
     client = _FakeAIClient(analysis_concurrency=3)
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     items = [_make_item(f"rss:test:{i}") for i in range(5)]
     active_count = 0
     max_active = 0
@@ -244,7 +253,7 @@ def test_analyze_batch_concurrent_processing(monkeypatch):
 def test_analyze_batch_concurrent_preserves_order(monkeypatch):
     """Verify that analyze_batch preserves input order in results."""
     client = _FakeAIClient(analysis_concurrency=3)
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     items = [_make_item(f"rss:test:{i}") for i in range(5)]
 
     async def fake_analyze_item(item):
@@ -265,7 +274,7 @@ def test_analyze_batch_concurrent_preserves_order(monkeypatch):
 
 def test_analyze_item_populates_score_reason_summary_tags(monkeypatch):
     client = _FakeAIClient()
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     item = _make_item("rss:t:1", title="Hello", content="Some prose.")
 
     asyncio.run(analyzer._analyze_item(item))
@@ -286,7 +295,7 @@ def test_analyze_item_populates_score_reason_summary_tags(monkeypatch):
 def test_analyze_item_separates_top_comments_section(monkeypatch):
     """When content contains ``--- Top Comments ---``, main + comments split correctly."""
     client = _FakeAIClient()
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     item = _make_item(
         item_id="rss:t:c",
         title="x",
@@ -313,7 +322,7 @@ def test_analyze_item_separates_top_comments_section(monkeypatch):
 
 def test_analyze_item_engagement_metadata_included(monkeypatch):
     client = _FakeAIClient()
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     item = _make_item(
         item_id="rss:t:engage",
         title="x",
@@ -354,7 +363,7 @@ def test_analyze_item_engagement_metadata_included(monkeypatch):
 def test_analyze_item_handles_parse_failure(monkeypatch):
     """When AI returns unparseable text, default score=0 / reason='Analysis response parse failed'."""
     client = _FakeAIClient()
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     item = _make_item("rss:t:bad", title="Pencil")
 
     async def _garbage(system, user, **kw):
@@ -371,7 +380,7 @@ def test_analyze_item_handles_parse_failure(monkeypatch):
 
 def test_analyze_item_uses_default_author_when_none(monkeypatch):
     client = _FakeAIClient()
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     item = _make_item("rss:t:anon", title="No author", author=None)
     captured: dict = {}
 
@@ -388,7 +397,7 @@ def test_analyze_item_handles_no_content(monkeypatch):
     """Content=None → prompt contains the unconditional "Content:" template header
     but the trailing body of the section is empty."""
     client = _FakeAIClient()
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     item = _make_item("rss:t:no-content", title="Stub", content=None)
     captured: dict = {}
 
@@ -406,7 +415,7 @@ def test_analyze_item_handles_no_content(monkeypatch):
 
 def test_analyze_item_includes_discussion_url_when_present(monkeypatch):
     client = _FakeAIClient()
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     item = _make_item(
         "rss:t:disc",
         title="x",
@@ -425,7 +434,7 @@ def test_analyze_item_includes_discussion_url_when_present(monkeypatch):
 
 def test_analyze_item_includes_community_note(monkeypatch):
     client = _FakeAIClient()
-    analyzer = ContentAnalyzer(client)
+    analyzer = ContentAnalyzer(client, _load_profiles())
     item = _make_item(
         "rss:t:note", title="x",
         metadata={"community_note": "Context added by moderators"},

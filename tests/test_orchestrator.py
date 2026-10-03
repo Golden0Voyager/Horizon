@@ -2,8 +2,8 @@
 
 Strategy: avoid spinning up scrapers / AI / email / webhook. Directly construct
 ``HorizonOrchestrator`` with a minimal Config and a MagicMock storage, then
-patch the seam entry points (``fetch_all_sources``, ``_analyze_content``,
-``merge_topic_duplicates``, ``_expand_twitter_discussion``, ``_enrich_important_items``,
+patch the seam entry points (``fetch_all_sources``, ``analyze_items``,
+``merge_topic_duplicates``, ``_expand_twitter_discussion``, ``enrich_items``,
 ``summarizer.generate_summary``) to verify orchestration logic in isolation.
 
 Coverage focus:
@@ -15,7 +15,7 @@ Coverage focus:
   drops duplicates + merges content with source label)
 - ``fetch_all_sources`` (all scraper types instantiated, exceptions swallowed)
 - ``_sub_source_label`` per-source key picks subreddit/feed/channel/ossinsight/repo/watchlist
-- ``_analyze_content`` delegates to ``ContentAnalyzer``
+- ``analyze_items`` delegates to ``ContentAnalyzer``
 """
 
 from __future__ import annotations
@@ -31,9 +31,10 @@ import pytest
 
 from src.models import (
     AIConfig,
+    CollectionConfig,
     Config,
     ContentItem,
-    FilteringConfig,
+    DigestConfig,
     OpenBBConfig,
     OSSInsightConfig,
     SourcesConfig,
@@ -80,12 +81,12 @@ def _build_item(
 @pytest.fixture
 def minimal_config() -> Config:
     return Config(
-        version="1.0",
         ai=AIConfig(
             provider="openai", model="x", api_key_env="OPENAI_API_KEY"
         ),
         sources=SourcesConfig(),
-        filtering=FilteringConfig(ai_score_threshold=7.0, time_window_hours=24),
+        collection=CollectionConfig(time_window_hours=24),
+        digest=DigestConfig(),
     )
 
 
@@ -392,11 +393,11 @@ def test_sub_source_label_unknown_when_no_metadata(
 
 
 # ---------------------------------------------------------------------------
-# _analyze_content delegation
+# analyze_items delegation
 # ---------------------------------------------------------------------------
 
 
-def test_analyze_content_calls_analyzer_with_ai_client(
+def test_analyze_items_calls_analyzer_with_ai_client(
     orchestrator: HorizonOrchestrator,
 ) -> None:
     items = [_build_item()]
@@ -409,9 +410,12 @@ def test_analyze_content_calls_analyzer_with_ai_client(
         fake_analyzer.analyze_batch = AsyncMock(return_value=[_build_item(ai_score=9.0)])
         fake_analyzer_cls.return_value = fake_analyzer
 
-        out = asyncio.run(orchestrator._analyze_content(items))
+        out = asyncio.run(orchestrator.analyze_items(items))
 
     fake_create.assert_called_once_with(orchestrator.config.ai)
-    fake_analyzer_cls.assert_called_once_with(fake_client)
+    # Merged (upstream) analyzer takes the profile registry and console.
+    fake_analyzer_cls.assert_called_once_with(
+        fake_client, orchestrator.profiles, console=orchestrator.console
+    )
     fake_analyzer.analyze_batch.assert_awaited_once_with(items)
     assert out == fake_analyzer.analyze_batch.return_value

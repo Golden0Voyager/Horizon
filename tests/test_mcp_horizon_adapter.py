@@ -64,7 +64,8 @@ def hz_horizon_adapter_minimal_config_dict_fixture() -> dict:
             "api_key_env": "OPENAI_API_KEY",
         },
         "sources": {},
-        "filtering": {},
+        "collection": {"time_window_hours": 24},
+                "digest": {},
     }
 
 
@@ -170,7 +171,8 @@ def _full_config() -> Config:
                 },
                 "ossinsight": {"enabled": True},
             },
-            "filtering": {},
+            "collection": {"time_window_hours": 24},
+                "digest": {},
         }
     )
 
@@ -235,12 +237,13 @@ def test_hz_horizon_adapter_get_enabled_sources_ossinsight_only_adds_no_extra() 
             "sources": {
                 "ossinsight": OSSInsightConfig(enabled=True).model_dump(),
             },
-            "filtering": {},
+            "collection": {"time_window_hours": 24},
+                "digest": {},
         }
     )
-    # OSSInsight is observation-only; it is not part of the enabled-source
-    # gating list returned to the MCP tool surface.
-    assert "ossinsight" not in horizon_adapter.get_enabled_sources(cfg)
+    # OSSInsight participates in the same enabled-source gating as every
+    # other source in the merged (upstream) adapter semantics.
+    assert "ossinsight" in horizon_adapter.get_enabled_sources(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +414,8 @@ def test_hz_horizon_adapter_load_config_expands_env_vars(
                 "base_url": "${TEST_BASE_URL}/v1",
             },
             "sources": {},
-            "filtering": {},
+            "collection": {"time_window_hours": 24},
+                "digest": {},
         }),
         encoding="utf-8",
     )

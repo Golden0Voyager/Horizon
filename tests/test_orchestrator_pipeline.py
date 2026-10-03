@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.models import (
     AIConfig,
+    CollectionConfig,
     Config,
     ContentItem,
-    FilteringConfig,
+    DigestConfig,
     SourcesConfig,
     TwitterConfig,
 )
@@ -23,12 +25,14 @@ from src.storage.manager import StorageManager
 @pytest.fixture
 def orchestrator() -> HorizonOrchestrator:
     cfg = Config(
-        version="1.0",
         ai=AIConfig(provider="openai", model="x", api_key_env="OPENAI_API_KEY"),
         sources=SourcesConfig(),
-        filtering=FilteringConfig(ai_score_threshold=7.0, time_window_hours=24),
+        collection=CollectionConfig(time_window_hours=24),
+        digest=DigestConfig(),
     )
-    return HorizonOrchestrator(cfg, MagicMock(spec=StorageManager))
+    storage = MagicMock(spec=StorageManager)
+    storage.summaries_dir = Path("summaries")
+    return HorizonOrchestrator(cfg, storage)
 
 
 def _item(**overrides: object) -> ContentItem:
@@ -50,7 +54,7 @@ def test_run_no_items_exits_early(
     with patch.object(orchestrator, "fetch_all_sources", new_callable=AsyncMock, return_value=[]):
         asyncio.run(orchestrator.run(force_hours=1))
     captured = capsys.readouterr()
-    assert "No new content found" in captured.out
+    assert "No new content found" in captured.err
 
 
 def test_run_full_pipeline_calls_all_stages(
@@ -63,43 +67,61 @@ def test_run_full_pipeline_calls_all_stages(
     with (
         patch.object(orchestrator, "fetch_all_sources", new_callable=AsyncMock, return_value=items),
         patch.object(orchestrator, "merge_cross_source_duplicates", side_effect=lambda x: x),
-        patch.object(orchestrator, "_analyze_content", new_callable=AsyncMock, return_value=items),
+        patch.object(orchestrator, "analyze_items", new_callable=AsyncMock, return_value=items),
         patch.object(orchestrator, "merge_topic_duplicates", new_callable=AsyncMock, return_value=items),
         patch.object(orchestrator, "_expand_twitter_discussion", new_callable=AsyncMock),
-        patch.object(orchestrator, "_enrich_important_items", new_callable=AsyncMock),
+        patch.object(orchestrator, "enrich_items", new_callable=AsyncMock),
         patch.object(orchestrator, "_generate_summary", new_callable=AsyncMock, return_value="# Summary"),
     ):
         asyncio.run(orchestrator.run(force_hours=1))
 
     captured = capsys.readouterr()
-    assert "Starting aggregation" in captured.out
-    # _enrich_important_items is mocked so the message won't appear
-    assert "Copied EN summary" in captured.out
+    assert "Starting aggregation" in captured.err
+    # enrich_items is mocked so the message won't appear
+    assert "Copied EN summary" in captured.err
 
 
 def test_run_zero_items_after_analysis_skips_enrich_and_summary(
     orchestrator: HorizonOrchestrator,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """When no items pass score threshold, enrich and summary are skipped."""
-    items = [_item(ai_score=3.0)]  # below 7.0 threshold
+    """When no items pass score threshold, enrich sees an empty item list."""
+    from src.models import (
+        ClassificationResult,
+        ContentAnalysis,
+        ProcessingResult,
+        ProfileSettingsConfig,
+    )
 
+    orchestrator.config.processing.profile_settings = {
+        "tech-news": ProfileSettingsConfig(threshold=7.0)
+    }
+    # A below-threshold item under the tech-news profile. The merged pipeline
+    # requires the profile-driven processing block for threshold filtering.
+    item = _item(
+        profile="tech-news",
+        processing=ProcessingResult(
+            classification=ClassificationResult(
+                profile="tech-news", method="source_override"
+            ),
+            analysis=ContentAnalysis(score=3.0, reason="r", summary="s", tags=[]),
+        ),
+    )
+    items = [item]
+
+    enrich_mock = AsyncMock()
     with (
         patch.object(orchestrator, "fetch_all_sources", new_callable=AsyncMock, return_value=items),
         patch.object(orchestrator, "merge_cross_source_duplicates", side_effect=lambda x: x),
-        patch.object(orchestrator, "_analyze_content", new_callable=AsyncMock, return_value=items),
+        patch.object(orchestrator, "analyze_items", new_callable=AsyncMock, return_value=items),
         patch.object(orchestrator, "merge_topic_duplicates", new_callable=AsyncMock, return_value=items),
         patch.object(orchestrator, "_expand_twitter_discussion", new_callable=AsyncMock),
-        patch.object(orchestrator, "_enrich_important_items", new_callable=AsyncMock),
+        patch.object(orchestrator, "enrich_items", enrich_mock),
         patch.object(orchestrator, "_generate_summary", new_callable=AsyncMock, return_value="# Summary"),
     ):
         asyncio.run(orchestrator.run(force_hours=1))
 
-    captured = capsys.readouterr()
-    # Items scored below threshold should be filtered out
-    # The _generate_summary should NOT be called if important_items is empty
-    # Actually, let's verify the score threshold filtering works
-    assert "scored" in captured.out
+    # Nothing passed the threshold, so enrichment ran on an empty list.
+    enrich_mock.assert_awaited_once_with([])
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +165,7 @@ def test_expand_twitter_no_twitter_items_noop(
 
 
 # ---------------------------------------------------------------------------
-# _enrich_important_items — real path
+# enrich_items — real path
 # ---------------------------------------------------------------------------
 
 
@@ -161,17 +183,17 @@ def test_enrich_calls_enricher(
         fake_enricher.enrich_batch = AsyncMock()
         fake_enricher_cls.return_value = fake_enricher
         fake_create.return_value = MagicMock()
-        asyncio.run(orchestrator._enrich_important_items(items))
+        asyncio.run(orchestrator.enrich_items(items))
 
     fake_enricher.enrich_batch.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
-# _analyze_content — delegation
+# analyze_items — delegation
 # ---------------------------------------------------------------------------
 
 
-def test_analyze_content_calls_analyzer(
+def test_analyze_items_calls_analyzer(
     orchestrator: HorizonOrchestrator,
 ) -> None:
     """Analyze delegates to ContentAnalyzer.analyze_batch."""
@@ -185,7 +207,7 @@ def test_analyze_content_calls_analyzer(
         fake_analyzer.analyze_batch = AsyncMock(return_value=[_item(ai_score=9.0)])
         fake_analyzer_cls.return_value = fake_analyzer
         fake_create.return_value = MagicMock()
-        out = asyncio.run(orchestrator._analyze_content(items))
+        out = asyncio.run(orchestrator.analyze_items(items))
 
     fake_analyzer.analyze_batch.assert_awaited_once()
     assert out[0].ai_score == 9.0

@@ -107,9 +107,10 @@ def test_generate_summary_formats_header_and_toc():
 
     assert "# Horizon Daily - 2026-01-04" in out
     assert "From 42 items, 2 important" in out
-    # TOC entries — both items get anchor links.
-    assert "#item-1" in out
-    assert "#item-2" in out
+    # TOC entries — both items get anchor links. Anchors are namespaced by
+    # profile group in the merged (upstream) digest layout.
+    assert "#item-unclassified-1" in out
+    assert "#item-unclassified-2" in out
     assert "9.0/10" in out
     assert "7.0/10" in out
 

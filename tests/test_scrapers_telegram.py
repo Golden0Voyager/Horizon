@@ -52,7 +52,7 @@ def test_parse_message_extracts_first_external_link():
     <html><body>
       <div class="tgme_widget_message" data-post="tech/12345">
         <time datetime="2026-01-02T10:00:00+00:00"></time>
-        <div class="tgme_widget_message_text">
+        <div class="tgme_widget_message_text js-message_text">
           Check out <a href="https://example.com/article">this article</a> on linkedin <a href="https://linkedin.com/post">post</a>
         </div>
       </div>
@@ -73,7 +73,7 @@ def test_parse_message_falls_back_to_tme_url():
     <html><body>
       <div class="tgme_widget_message" data-post="tech/99">
         <time datetime="2026-01-02T10:00:00+00:00"></time>
-        <div class="tgme_widget_message_text">
+        <div class="tgme_widget_message_text js-message_text">
           Just some plain text.
         </div>
       </div>
@@ -82,7 +82,7 @@ def test_parse_message_falls_back_to_tme_url():
     scraper = TelegramScraper(config, _client_with_text(html))
     result = asyncio.run(scraper.fetch(_since()))
     assert len(result) == 1
-    assert str(result[0].url) == "https://t.me/tech/99"
+    assert str(result[0].url) == "https://telegram.me/tech/99"
 
 
 def test_parse_message_skips_missing_post_id():
@@ -91,7 +91,7 @@ def test_parse_message_skips_missing_post_id():
     html = """<html><body>
       <div class="tgme_widget_message">
         <time datetime="2026-01-02T10:00:00+00:00"></time>
-        <div class="tgme_widget_message_text">x</div>
+        <div class="tgme_widget_message_text js-message_text">x</div>
       </div>
     </body></html>"""
     scraper = TelegramScraper(config, _client_with_text(html))
@@ -119,7 +119,8 @@ def test_make_title_hard_truncates_when_no_punctuation():
     assert len(title) == 80
 
 
-def test_fetch_returns_empty_after_failed_request():
+def test_fetch_raises_when_all_channels_fail():
+    """When every channel request fails, the scraper raises (upstream semantics)."""
     cfg = TelegramChannelConfig(channel="tech", fetch_limit=10)
     config = TelegramConfig(channels=[cfg])
 
@@ -135,5 +136,8 @@ def test_fetch_returns_empty_after_failed_request():
 
     client.get = fake_get
     scraper = TelegramScraper(config, client)
-    result = asyncio.run(scraper.fetch(_since()))
-    assert result == []
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="All Telegram channels failed"):
+        asyncio.run(scraper.fetch(_since()))

@@ -5,32 +5,36 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.models import (
     AIConfig,
+    CollectionConfig,
     Config,
     ContentItem,
-    FilteringConfig,
+    DigestConfig,
     OpenBBConfig,
     SourcesConfig,
     TwitterConfig,
 )
-from src.orchestrator import HorizonOrchestrator
+from src.orchestrator import HorizonOrchestrator, SourceFetchOutcome
 from src.storage.manager import StorageManager
 
 
 @pytest.fixture
 def orchestrator() -> HorizonOrchestrator:
     cfg = Config(
-        version="1.0",
         ai=AIConfig(provider="openai", model="x", api_key_env="OPENAI_API_KEY"),
         sources=SourcesConfig(),
-        filtering=FilteringConfig(ai_score_threshold=7.0, time_window_hours=24),
+        collection=CollectionConfig(time_window_hours=24),
+        digest=DigestConfig(),
     )
-    return HorizonOrchestrator(cfg, MagicMock(spec=StorageManager))
+    storage = MagicMock(spec=StorageManager)
+    storage.summaries_dir = Path("summaries")
+    return HorizonOrchestrator(cfg, storage)
 
 
 def _item(**overrides: object) -> ContentItem:
@@ -138,7 +142,7 @@ def test_expand_twitter_fetch_reply_disabled_no_op(
 
 
 # ---------------------------------------------------------------------------
-# _enrich_important_items — empty list passthrough
+# enrich_items — empty list passthrough
 # ---------------------------------------------------------------------------
 
 
@@ -146,7 +150,7 @@ def test_enrich_empty_list_noop(
     orchestrator: HorizonOrchestrator,
 ) -> None:
     """Empty items list returns immediately."""
-    asyncio.run(orchestrator._enrich_important_items([]))
+    asyncio.run(orchestrator.enrich_items([]))
 
 
 # ---------------------------------------------------------------------------
@@ -189,8 +193,9 @@ def test_fetch_with_progress_prints_sub_source_breakdown(
     scraper_mock.fetch = AsyncMock(return_value=items)
     asyncio.run(orchestrator._fetch_with_progress("Reddit", scraper_mock, dt.now(UTC)))
     captured = capsys.readouterr()
-    assert "r/python" in captured.out
-    assert "r/ai" in captured.out
+    # Output goes through the shared stderr console (upstream #138).
+    assert "r/python" in captured.err
+    assert "r/ai" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +212,12 @@ def test_fetch_all_sources_uses_proxy_when_set(
     orchestrator.config.sources.hackernews.enabled = True
 
     with (
-        patch.object(orchestrator, "_fetch_with_progress", new_callable=AsyncMock, return_value=[]),
+        patch.object(
+            orchestrator,
+            "_fetch_with_progress",
+            new_callable=AsyncMock,
+            return_value=SourceFetchOutcome(source_name="hackernews", status="success", items=[]),
+        ),
         patch("httpx.AsyncClient") as fake_client,
     ):
         fake_ctx = MagicMock()

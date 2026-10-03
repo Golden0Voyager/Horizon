@@ -28,7 +28,6 @@ def minimal_config_dict() -> dict[str, Any]:
     """Minimal valid config shape (``AIConfig`` + sources defaults)."""
 
     return {
-        "version": "1.0",
         "ai": {
             "provider": "openai",
             "model": "deepseek-chat",
@@ -44,7 +43,7 @@ def minimal_config_dict() -> dict[str, Any]:
             "telegram": {"enabled": False, "channels": []},
             "ossinsight": {"enabled": False},
         },
-        "filtering": {"ai_score_threshold": 7.0, "time_window_hours": 24},
+        "collection": {"time_window_hours": 24}, "digest": {},
     }
 
 
@@ -142,7 +141,7 @@ def test_load_config_invalid_json_raises_config_error(
 def test_load_config_bad_pydantic_raises_config_error(
     storage: StorageManager, tmp_data_dir: Path, minimal_config_dict: dict[str, Any]
 ) -> None:
-    minimal_config_dict["filtering"]["time_window_hours"] = "not-an-int"
+    minimal_config_dict["collection"]["time_window_hours"] = "not-an-int"
     (tmp_data_dir / "config.json").write_text(
         json.dumps(minimal_config_dict), encoding="utf-8"
     )

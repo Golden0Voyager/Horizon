@@ -46,3 +46,32 @@ def fast_twitter_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.scrapers.twitter.asyncio.sleep", _noop_sleep)
     monkeypatch.setattr("src.scrapers.twitter.random.uniform", lambda _a, _b: 0)
     monkeypatch.setattr("src.scrapers.twitter.random.randint", lambda _a, _b: 0)
+
+# A public address returned for every hostname in unit tests. The SSRF guard
+# in ``src.url_security`` resolves destinations via ``socket.getaddrinfo`` and
+# rejects non-public answers; fake-IP DNS setups (Clash, some VPNs and CI
+# sandboxes) answer with 198.18.0.0/16, which would break every test that
+# stubs the HTTP client but still performs URL validation.
+_PUBLIC_RESOLVE = [
+    (
+        None,
+        None,
+        None,
+        "",
+        ("93.184.216.34", 443),
+    )
+]
+
+
+@pytest.fixture(autouse=True)
+def _force_public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve every hostname to a public IP so the SSRF guard passes.
+
+    Unit tests stub the HTTP client itself, so real DNS resolution is never
+    needed; pinning it keeps the suite deterministic on machines whose
+    resolver answers with non-public (fake-IP) addresses.
+    """
+    import socket
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(socket, "getaddrinfo", MagicMock(return_value=_PUBLIC_RESOLVE))

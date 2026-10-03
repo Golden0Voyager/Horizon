@@ -11,8 +11,18 @@ import pytest
 from pydantic import ValidationError
 
 from src.ai.summarizer import DailySummarizer
-from src.models import ContentItem, SourceType, WebhookConfig
+from src.models import (
+    ClassificationResult,
+    ContentAnalysis,
+    ContentArtifact,
+    ContentBlock,
+    ContentItem,
+    ProcessingResult,
+    SourceType,
+    WebhookConfig,
+)
 from src.services.webhook import (
+    WebhookDeliveryStatus,
     WebhookNotifier,
     _extract_headers,
     _format_markdown_for_webhook,
@@ -23,6 +33,29 @@ from src.services.webhook import (
     redact_headers,
     redact_url,
 )
+
+_PUBLIC_RESOLVE = [
+    (
+        None,
+        None,
+        None,
+        "",
+        ("93.184.216.34", 443),
+    )
+]
+
+
+@pytest.fixture(autouse=True)
+def _force_public_dns(monkeypatch: pytest.MonkeyPatch):
+    """Resolve every hostname to a public IP for the SSRF guard.
+
+    The webhook notifier validates destinations via ``socket.getaddrinfo``;
+    fake-IP DNS setups (Clash etc.) answer with 198.18.0.0/16, which the
+    guard correctly rejects as non-public. These tests stub the HTTP client,
+    so resolution never needs to be real.
+    """
+    monkeypatch.setattr("socket.getaddrinfo", MagicMock(return_value=_PUBLIC_RESOLVE))
+
 
 _TEST_URL_ENV = "TEST_WEBHOOK_URL"
 _TEST_URL = "https://example.com/webhook"
@@ -433,8 +466,10 @@ class TestWebhookNotifier:
         config = WebhookConfig(enabled=False, url_env=_TEST_URL_ENV)
         notifier = WebhookNotifier(config)
         with patch("httpx.AsyncClient") as mock_client:
-            _run_async(notifier.notify({"date": "2026-04-24"}))
+            result = _run_async(notifier.notify({"date": "2026-04-24"}))
             mock_client.assert_not_called()
+            assert result.status == WebhookDeliveryStatus.DISABLED
+            assert result.sent is False
         del os.environ[_TEST_URL_ENV]
 
     def test_empty_url_env_skips_notification(self):
@@ -443,8 +478,10 @@ class TestWebhookNotifier:
         notifier = WebhookNotifier(config)
         assert notifier.url is None
         with patch("httpx.AsyncClient") as mock_client:
-            _run_async(notifier.notify({"date": "2026-04-24"}))
+            result = _run_async(notifier.notify({"date": "2026-04-24"}))
             mock_client.assert_not_called()
+            assert result.status == WebhookDeliveryStatus.SKIPPED
+            assert result.sent is False
 
     def test_get_request_when_no_body(self):
         os.environ[_TEST_URL_ENV] = "https://example.com/webhook?date=#{date}"
@@ -814,6 +851,33 @@ def _make_item(title="Test Item", url="https://example.com/test", score=8.0):
         ai_score=score,
         ai_summary="AI summary",
         ai_tags=["test"],
+        profile="tech-news",
+        processing=ProcessingResult(
+            classification=ClassificationResult(
+                profile="tech-news", method="source_override"
+            ),
+            analysis=ContentAnalysis(
+                score=score,
+                reason="test",
+                summary="AI summary",
+                tags=["test"],
+            ),
+            artifacts={
+                language: ContentArtifact(
+                    language=language,
+                    title=title,
+                    blocks=[
+                        ContentBlock(
+                            id="summary",
+                            title="Summary",
+                            content="AI summary",
+                            primary=True,
+                        )
+                    ],
+                )
+                for language in ("en", "zh")
+            },
+        ),
     )
 
 
@@ -1023,6 +1087,80 @@ class TestSendDailySummary:
         assert panels[1]["header"]["title"]["content"].startswith("2. Item B")
         del os.environ[_TEST_URL_ENV]
 
+    def test_feishu_collapsible_groups_profiles_and_resets_numbering(self):
+        os.environ[_TEST_URL_ENV] = _TEST_URL
+        config = WebhookConfig(
+            enabled=True,
+            url_env=_TEST_URL_ENV,
+            platform="feishu",
+            layout="collapsible",
+        )
+        notifier = WebhookNotifier(config)
+        summarizer = DailySummarizer(
+            profile_names={
+                "tech-news": {"default": "Technology News", "zh": "科技新闻"},
+                "tech-blog": {"default": "Technology Blog", "zh": "科技博客"},
+            }
+        )
+        news = _make_item(title="News")
+        blog = _make_item(title="Blog", url="https://example.com/blog")
+        blog.profile = "tech-blog"
+        blog.processing.classification.profile = "tech-blog"
+
+        messages = notifier.build_daily_summary_messages(
+            summary="# Full summary",
+            important_items=[news, blog],
+            all_items_count=2,
+            date="2026-04-24",
+            lang="zh",
+            summarizer=summarizer,
+        )
+
+        elements = messages[0]["_request_body_override"]["card"]["body"]["elements"]
+        headings = [element["content"] for element in elements if element["tag"] == "markdown"]
+        panels = [element for element in elements if element["tag"] == "collapsible_panel"]
+
+        assert headings[1:] == ["## 科技新闻", "## 科技博客"]
+        assert panels[0]["header"]["title"]["content"].startswith("1. News")
+        assert panels[1]["header"]["title"]["content"].startswith("1. Blog")
+        assert "第 1/1 条" in panels[0]["elements"][0]["content"]
+        assert "第 1/1 条" in panels[1]["elements"][0]["content"]
+        del os.environ[_TEST_URL_ENV]
+
+    def test_summary_and_items_keeps_global_and_profile_local_positions(self):
+        os.environ[_TEST_URL_ENV] = _TEST_URL
+        config = WebhookConfig(
+            enabled=True,
+            url_env=_TEST_URL_ENV,
+            delivery="summary_and_items",
+        )
+        notifier = WebhookNotifier(config)
+        summarizer = DailySummarizer()
+        news = _make_item(title="News")
+        blog = _make_item(title="Blog", url="https://example.com/blog")
+        blog.profile = "tech-blog"
+        blog.processing.classification.profile = "tech-blog"
+
+        messages = notifier.build_daily_summary_messages(
+            summary="# Full summary",
+            important_items=[news, blog],
+            all_items_count=2,
+            date="2026-04-24",
+            lang="en",
+            summarizer=summarizer,
+        )
+
+        news_message, blog_message = messages[1:]
+        assert news_message["item_index"] == 1
+        assert blog_message["item_index"] == 2
+        assert news_message["item_count"] == 2
+        assert blog_message["item_count"] == 2
+        assert news_message["profile_item_index"] == 1
+        assert blog_message["profile_item_index"] == 1
+        assert news_message["profile_item_count"] == 1
+        assert blog_message["profile_item_count"] == 1
+        del os.environ[_TEST_URL_ENV]
+
     def test_language_filter_skips_non_matching_lang(self):
         """webhook.languages=['zh'] skips 'en' language."""
         os.environ[_TEST_URL_ENV] = _TEST_URL
@@ -1229,11 +1367,28 @@ class TestURLValidation:
         del os.environ[_TEST_URL_ENV]
 
     def test_valid_http_url_passes(self):
-        os.environ[_TEST_URL_ENV] = "http://localhost:8080/hook"
+        os.environ[_TEST_URL_ENV] = "http://example.com:8080/hook"
         config = WebhookConfig(enabled=True, url_env=_TEST_URL_ENV)
         notifier = WebhookNotifier(config)
-        assert notifier.url == "http://localhost:8080/hook"
+        assert notifier.url == "http://example.com:8080/hook"
         del os.environ[_TEST_URL_ENV]
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost/hook",
+            "http://api.localhost/hook",
+            "https://user:password@example.com/hook",
+        ],
+    )
+    def test_unsafe_url_raises_value_error(self, url):
+        os.environ[_TEST_URL_ENV] = url
+        config = WebhookConfig(enabled=True, url_env=_TEST_URL_ENV)
+        try:
+            with pytest.raises(ValueError):
+                WebhookNotifier(config)
+        finally:
+            del os.environ[_TEST_URL_ENV]
 
     def test_no_hostname_raises_value_error(self):
         """URLs without a hostname raise ValueError."""
@@ -1347,13 +1502,16 @@ class TestHTTPStatusHandling:
             mock_client_cls.return_value = mock_client
 
             notifier.console = mock_console
-            _run_async(notifier.notify({"date": "2026-04-24"}))
+            result = _run_async(notifier.notify({"date": "2026-04-24"}))
 
             printed = " ".join(str(c) for c in mock_console.print.call_args_list)
             assert "status=200" in printed
-            assert '"code":0' in printed
+            assert '"code":0' not in printed
             # Success response should be green, not yellow
             assert "[green]" in printed
+            assert result.status == WebhookDeliveryStatus.SUCCESS
+            assert result.sent is True
+            assert result.status_code == 200
         self._cleanup()
 
     def test_2xx_feishu_error_code_prints_yellow_warning(self):
@@ -1373,12 +1531,15 @@ class TestHTTPStatusHandling:
             mock_client_cls.return_value = mock_client
 
             notifier.console = mock_console
-            _run_async(notifier.notify({"date": "2026-04-24"}))
+            result = _run_async(notifier.notify({"date": "2026-04-24"}))
 
             printed = " ".join(str(c) for c in mock_console.print.call_args_list)
             assert "19001" in printed
             assert "Feishu/Lark" in printed
             assert "[yellow]" in printed
+            assert result.status == WebhookDeliveryStatus.PLATFORM_FAILURE
+            assert result.sent is False
+            assert result.status_code == 200
         self._cleanup()
 
     def test_2xx_dingtalk_error_code_prints_yellow_warning(self):
@@ -1493,10 +1654,12 @@ class TestHTTPStatusHandling:
             mock_client_cls.return_value = mock_client
 
             notifier.console = mock_console
-            _run_async(notifier.notify({"date": "2026-04-24"}))
+            result = _run_async(notifier.notify({"date": "2026-04-24"}))
 
             printed = " ".join(str(c) for c in mock_console.print.call_args_list)
             assert "client error" in printed.lower()
+            assert result.status == WebhookDeliveryStatus.HTTP_FAILURE
+            assert result.status_code == 400
         self._cleanup()
 
     def test_5xx_server_error_prints_warning(self):
@@ -1515,10 +1678,12 @@ class TestHTTPStatusHandling:
             mock_client_cls.return_value = mock_client
 
             notifier.console = mock_console
-            _run_async(notifier.notify({"date": "2026-04-24"}))
+            result = _run_async(notifier.notify({"date": "2026-04-24"}))
 
             printed = " ".join(str(c) for c in mock_console.print.call_args_list)
             assert "server error" in printed.lower()
+            assert result.status == WebhookDeliveryStatus.HTTP_FAILURE
+            assert result.status_code == 500
         self._cleanup()
 
 
@@ -1547,10 +1712,12 @@ class TestExceptionClassification:
             mock_client_cls.return_value = mock_client
 
             notifier.console = mock_console
-            _run_async(notifier.notify({"date": "2026-04-24"}))
+            result = _run_async(notifier.notify({"date": "2026-04-24"}))
 
             printed = " ".join(str(c) for c in mock_console.print.call_args_list)
             assert "connection failed" in printed.lower()
+            assert result.status == WebhookDeliveryStatus.NETWORK_FAILURE
+            assert result.error_type == "connect"
         self._cleanup()
 
     def test_timeout_exception_prints_warning(self):
@@ -1565,10 +1732,12 @@ class TestExceptionClassification:
             mock_client_cls.return_value = mock_client
 
             notifier.console = mock_console
-            _run_async(notifier.notify({"date": "2026-04-24"}))
+            result = _run_async(notifier.notify({"date": "2026-04-24"}))
 
             printed = " ".join(str(c) for c in mock_console.print.call_args_list)
             assert "timed out" in printed.lower()
+            assert result.status == WebhookDeliveryStatus.NETWORK_FAILURE
+            assert result.error_type == "timeout"
         self._cleanup()
 
     def test_invalid_url_exception_prints_warning(self):

@@ -11,6 +11,7 @@ from email.utils import parsedate_to_datetime
 import feedparser
 import httpx
 
+from ..extractors import ExtractorRegistry
 from ..models import ContentItem, RSSSourceConfig, SourceType
 from .base import BaseScraper
 
@@ -20,14 +21,21 @@ logger = logging.getLogger(__name__)
 class RSSScraper(BaseScraper):
     """Scraper for RSS/Atom feeds."""
 
-    def __init__(self, sources: list[RSSSourceConfig], http_client: httpx.AsyncClient):
+    def __init__(
+        self,
+        sources: list[RSSSourceConfig],
+        http_client: httpx.AsyncClient,
+        extractors: ExtractorRegistry | None = None,
+    ):
         """Initialize RSS scraper.
 
         Args:
             sources: List of RSS feed configurations
             http_client: Shared async HTTP client
+            extractors: Optional registry of content extractors for full article fetching
         """
         super().__init__({"sources": sources}, http_client)
+        self._extractors = extractors
 
     async def fetch(self, since: datetime) -> list[ContentItem]:
         """Fetch RSS feed items.
@@ -36,7 +44,7 @@ class RSSScraper(BaseScraper):
             since: Only fetch items published after this time
 
         Returns:
-            List[ContentItem]: Fetched content items
+            list[ContentItem]: Fetched content items
         """
         items = []
         sources = self.config["sources"]
@@ -60,7 +68,7 @@ class RSSScraper(BaseScraper):
             since: Only fetch items after this time
 
         Returns:
-            List[ContentItem]: Feed content items
+            list[ContentItem]: Feed content items
         """
         items = []
 
@@ -95,6 +103,15 @@ class RSSScraper(BaseScraper):
                 # Extract content
                 content = self._extract_content(entry)
 
+                if source.content_extractor and self._extractors:
+                    extractor = self._extractors.get(source.content_extractor)
+                    if extractor:
+                        url = entry.get("link", "")
+                        if url:
+                            full = await extractor.extract(url, self.http)
+                            if full:
+                                content = full
+
                 item = ContentItem(
                     id=self._generate_id("rss", feed_id, entry_hash),
                     source_type=SourceType.RSS,
@@ -103,6 +120,7 @@ class RSSScraper(BaseScraper):
                     content=content,
                     author=entry.get("author", source.name),
                     published_at=published_at,
+                    profile=source.profile,
                     metadata={
                         "feed_name": source.name,
                         "category": source.category,
@@ -138,7 +156,10 @@ class RSSScraper(BaseScraper):
                         )
                     # Fallback to string parsing
                     date_str = entry[field]
-                    return parsedate_to_datetime(date_str)
+                    parsed_date = parsedate_to_datetime(date_str)
+                    if parsed_date.tzinfo is None:
+                        parsed_date = parsed_date.replace(tzinfo=UTC)
+                    return parsed_date
                 except Exception:
                     continue
 

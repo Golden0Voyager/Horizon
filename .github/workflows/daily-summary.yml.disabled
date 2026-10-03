@@ -2,8 +2,10 @@ name: Daily Horizon Summary
 
 on:
   schedule:
+    # GitHub scheduled workflows use UTC. 20:00 UTC is 04:00 Asia/Shanghai;
+    # this intentionally runs early to offset the observed schedule delay.
     - cron: '0 23 * * *'
-  workflow_dispatch:
+  workflow_dispatch:      # Allow manual trigger
 
 jobs:
   daily-summary:
@@ -68,6 +70,8 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           SENSENOVA_API_KEY: ${{ secrets.SENSENOVA_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          LWN_KEY: ${{ secrets.LWN_KEY }}
 
           # Tools
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}

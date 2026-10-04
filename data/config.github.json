@@ -1,6 +1,7 @@
 {
   "ai": {
     "provider": "sensenova",
+    "provider_chain": "sensenova,nvidia",
     "model": "sensenova-6.7-flash-lite",
     "api_key_env": "SENSENOVA_API_KEY",
     "temperature": 0.3,
@@ -153,7 +154,10 @@
           "channel": "zaihuapd",
           "enabled": true,
           "fetch_limit": 20,
-          "profile": ["tech-news", "finance-news"]
+          "profile": [
+            "tech-news",
+            "finance-news"
+          ]
         }
       ]
     }

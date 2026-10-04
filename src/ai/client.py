@@ -649,6 +649,11 @@ class ChainedAIClient(AIClient):
             return True
         if "401" in msg or "403" in msg or "quota" in msg or "exceeded" in msg:
             return True
+        # Some OpenAI-compatible gateways answer 404 for a model that exists
+        # on other backend nodes (observed on SenseNova under load); the next
+        # provider in the chain is a better bet than retrying the same one.
+        if "404" in msg or "not found" in msg:
+            return True
         if "502" in msg or "503" in msg or "service unavailable" in msg:
             return True
         return "empty response" in msg

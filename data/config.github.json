@@ -2,7 +2,7 @@
   "ai": {
     "provider": "sensenova",
     "provider_chain": "sensenova,ali",
-    "model": "sensenova-6.7-flash-lite",
+    "model": "sensenova-6.8-flash-lite",
     "api_key_env": "SENSENOVA_API_KEY",
     "temperature": 0.3,
     "max_tokens": 8192,

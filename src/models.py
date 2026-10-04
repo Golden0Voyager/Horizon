@@ -234,7 +234,7 @@ AI_PROVIDER_DEFAULTS: dict[AIProvider, dict[str, Any]] = {
         "base_url": "https://integrate.api.nvidia.com/v1",
     },
     AIProvider.SENSENOVA: {
-        "model": "sensenova-6.7-flash-lite",
+        "model": "sensenova-6.8-flash-lite",
         "api_key_env": "SENSENOVA_API_KEY",
         "base_url": "https://token.sensenova.cn/v1",
     },

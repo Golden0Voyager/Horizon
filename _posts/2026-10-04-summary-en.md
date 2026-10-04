@@ -5,7 +5,7 @@ date: 2026-10-04
 lang: en
 ---
 
-> Analyzed 18 items, but none met the importance threshold.
+> Analyzed 28 items, but none met the importance threshold.
 
 No significant developments today. This might indicate:
 - A quiet day in your tracked sources
@@ -13,6 +13,6 @@ No significant developments today. This might indicate:
 - Your information sources need expansion
 
 Consider:
-1. Lowering the `ai_score_threshold` in config.json
+1. Lowering the configured profile threshold
 2. Adding more diverse information sources
 3. Checking if the AI model is working correctly

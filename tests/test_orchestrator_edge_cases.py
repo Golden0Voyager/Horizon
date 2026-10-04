@@ -234,12 +234,27 @@ def test_fetch_all_sources_uses_proxy_when_set(
 # ---------------------------------------------------------------------------
 
 
+def _disable_default_sources(orchestrator: HorizonOrchestrator) -> None:
+    """Turn off the sources that are enabled by model defaults.
+
+    The instantiation tests below only exercise one scraper at a time; without
+    this, ``fetch_all_sources`` fires real HTTP requests for the other
+    default-enabled sources, which hang on CI (no proxy to compensate for the
+    conftest DNS stub) until the 30s pytest-timeout kills them.
+    """
+    orchestrator.config.sources.hackernews.enabled = False
+    orchestrator.config.sources.reddit.enabled = False
+    orchestrator.config.sources.telegram.enabled = False
+    orchestrator.config.sources.ossinsight.enabled = False
+
+
 def test_fetch_all_sources_instantiates_github_scraper(
     orchestrator: HorizonOrchestrator,
 ) -> None:
     """When GitHub sources are configured, GitHubScraper is instantiated."""
     from src.models import GitHubSourceConfig
 
+    _disable_default_sources(orchestrator)
     orchestrator.config.sources.github = [GitHubSourceConfig(type="repo_releases", owner="test", repo="test")]
     with patch("src.orchestrator.GitHubScraper") as fake_github:
         fake_github.return_value.fetch = AsyncMock(return_value=[])
@@ -256,6 +271,7 @@ def test_fetch_all_sources_instantiates_openbb_scraper(
     orchestrator: HorizonOrchestrator,
 ) -> None:
     """When OpenBB is enabled, OpenBBScraper is instantiated."""
+    _disable_default_sources(orchestrator)
     orchestrator.config.sources.openbb = OpenBBConfig(enabled=True)
     with patch("src.orchestrator.OpenBBScraper") as fake_openbb:
         fake_openbb.return_value.fetch = AsyncMock(return_value=[])

@@ -199,7 +199,7 @@ AI_PROVIDER_DEFAULTS: dict[AIProvider, dict[str, Any]] = {
         "base_url": "http://localhost:11434/v1",
     },
     AIProvider.MODELSCOPE: {
-        "model": "Qwen/Qwen2.5-7B-Instruct",
+        "model": "Qwen/Qwen3.5-35B-A3B",
         "api_key_env": "MODELSCOPE_API_KEY",
         "base_url": "https://api-inference.modelscope.cn/v1",
     },
@@ -224,7 +224,7 @@ AI_PROVIDER_DEFAULTS: dict[AIProvider, dict[str, Any]] = {
         "base_url": "https://api.groq.com/openai/v1",
     },
     AIProvider.SILICONFLOW: {
-        "model": "Qwen/Qwen2.5-7B-Instruct",
+        "model": "Qwen/Qwen3.5-35B-A3B",
         "api_key_env": "SILICONFLOW_API_KEY",
         "base_url": "https://api.siliconflow.cn/v1",
     },

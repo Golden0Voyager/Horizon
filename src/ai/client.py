@@ -668,8 +668,12 @@ def _create_chained_client(config: AIConfig) -> ChainedAIClient:
 
     chain_configs: list[AIConfig] = []
     for name in provider_names:
+        # Entries may carry a per-node model override as "provider:model".
+        # Model IDs never contain ":" (they do contain "/"), so splitting on
+        # the first colon is safe.
+        provider_name, _, model_override = name.partition(":")
         try:
-            provider = AIProvider(name)
+            provider = AIProvider(provider_name)
         except ValueError:
             raise ValueError(f"Unsupported AI provider in chain: {name}") from None
 
@@ -677,7 +681,7 @@ def _create_chained_client(config: AIConfig) -> ChainedAIClient:
         base_url = config.base_url if provider == config.provider else defaults.get("base_url")
         cfg = AIConfig(
             provider=provider,
-            model=defaults.get("model", config.model),
+            model=model_override or defaults.get("model", config.model),
             api_key_env=defaults.get("api_key_env", config.api_key_env),
             base_url=base_url,
             temperature=config.temperature,

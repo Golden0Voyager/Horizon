@@ -1,7 +1,7 @@
 {
   "ai": {
     "provider": "sensenova",
-    "provider_chain": "sensenova,modelscope",
+    "provider_chain": "sensenova,modelscope:deepseek-ai/DeepSeek-V4.1-Flash,modelscope:ZhipuAI/GLM-5.2,modelscope:stepfun-ai/Step-3.7-Flash,modelscope:Qwen/Qwen3.5-397B-A17B,modelscope:Qwen/Qwen3.8-Flash-Next",
     "model": "sensenova-6.8-flash-lite",
     "api_key_env": "SENSENOVA_API_KEY",
     "temperature": 0.3,

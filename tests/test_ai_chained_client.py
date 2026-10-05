@@ -244,6 +244,33 @@ def test_create_chained_client_parses_chain():
     assert chained.configs[1].api_key_env == "SENSENOVA_API_KEY"
 
 
+def test_create_chained_client_supports_per_node_model_override():
+    """Chain entries may override the model as "provider:model".
+
+    Needed for chains that reuse one provider (e.g. several ModelScope
+    models as successive fallbacks); model IDs contain "/" but never ":".
+    """
+    config = AIConfig(
+        provider=AIProvider.SENSENOVA,
+        model="m1",
+        api_key_env="K1",
+        provider_chain=(
+            "modelscope:deepseek-ai/DeepSeek-V4.1-Flash,"
+            "modelscope:ZhipuAI/GLM-5.2"
+        ),
+    )
+    chained = _create_chained_client(config)
+    assert [c.model for c in chained.configs] == [
+        "deepseek-ai/DeepSeek-V4.1-Flash",
+        "ZhipuAI/GLM-5.2",
+    ]
+    assert all(c.provider == AIProvider.MODELSCOPE for c in chained.configs)
+    assert all(
+        c.base_url == "https://api-inference.modelscope.cn/v1"
+        for c in chained.configs
+    )
+
+
 def test_create_chained_client_rejects_unknown_provider():
     """_create_chained_client rejects unknown providers in chain."""
     config = AIConfig(
